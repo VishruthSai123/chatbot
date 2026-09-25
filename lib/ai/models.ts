@@ -1,4 +1,4 @@
-export const DEFAULT_CHAT_MODEL = "moonshotai/kimi-k2.5";
+export const DEFAULT_CHAT_MODEL = "google/gemini-1.5-flash";
 
 export const titleModel = {
   description: "Fast model for title generation",
@@ -61,6 +61,12 @@ export const chatModels: ChatModel[] = [
     name: "Grok 4.1 Fast",
     provider: "xai",
   },
+  {
+    description: "Google Gemini Flash Lite",
+    id: "google/gemini-1.5-flash",
+    name: "Gemini 1.5 Flash",
+    provider: "google",
+  },
 ];
 
 export async function getCapabilities(): Promise<
@@ -68,6 +74,9 @@ export async function getCapabilities(): Promise<
 > {
   const results = await Promise.all(
     chatModels.map(async (model) => {
+      if (model.id.startsWith("google/")) {
+        return [model.id, { reasoning: false, tools: true, vision: true }];
+      }
       try {
         const res = await fetch(
           `https://ai-gateway.vercel.sh/v1/models/${model.id}/endpoints`,
@@ -204,6 +213,10 @@ export async function getModelAvailability(
 
   if (!model) {
     return "unknown";
+  }
+
+  if (modelId.startsWith("google/")) {
+    return "healthy";
   }
 
   try {
