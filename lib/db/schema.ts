@@ -134,3 +134,69 @@ export const stream = pgTable(
 );
 
 export type Stream = InferSelectModel<typeof stream>;
+
+export const project = pgTable("Project", {
+  authConfig: json("authConfig"),
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
+  environment: varchar("environment", {
+    enum: ["production", "staging", "local"],
+  })
+    .notNull()
+    .default("staging"),
+  githubRepo: varchar("githubRepo", { length: 256 }),
+  id: uuid("id").primaryKey().notNull().defaultRandom(),
+  name: text("name").notNull(),
+  targetUrl: text("targetUrl").notNull(),
+  updatedAt: timestamp("updatedAt").notNull().defaultNow(),
+  userId: uuid("userId")
+    .notNull()
+    .references(() => user.id),
+});
+
+export type Project = InferSelectModel<typeof project>;
+
+export const testSession = pgTable("TestSession", {
+  browserSessionId: text("browserSessionId"),
+  chatId: uuid("chatId")
+    .notNull()
+    .references(() => chat.id, { onDelete: "cascade" }),
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
+  id: uuid("id").primaryKey().notNull().defaultRandom(),
+  liveUrl: text("liveUrl"),
+  projectId: uuid("projectId").references(() => project.id, {
+    onDelete: "set null",
+  }),
+  status: varchar("status", {
+    enum: ["initializing", "active", "evaluating", "completed", "error"],
+  })
+    .notNull()
+    .default("initializing"),
+  targetUrl: text("targetUrl").notNull(),
+  updatedAt: timestamp("updatedAt").notNull().defaultNow(),
+});
+
+export type TestSession = InferSelectModel<typeof testSession>;
+
+export const qaFinding = pgTable("QAFinding", {
+  actualResult: text("actualResult").notNull(),
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
+  evidence: json("evidence").notNull(),
+  expectedResult: text("expectedResult").notNull(),
+  id: uuid("id").primaryKey().notNull().defaultRandom(),
+  likelyCause: text("likelyCause"),
+  recordingUrl: text("recordingUrl"),
+  reproductionSteps: json("reproductionSteps").notNull(),
+  severity: varchar("severity", {
+    enum: ["critical", "high", "medium", "low", "suggestion"],
+  }).notNull(),
+  suggestedFix: text("suggestedFix"),
+  testSessionId: uuid("testSessionId")
+    .notNull()
+    .references(() => testSession.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  verdict: varchar("verdict", {
+    enum: ["pass", "fail", "uncertain"],
+  }).notNull(),
+});
+
+export type QAFinding = InferSelectModel<typeof qaFinding>;

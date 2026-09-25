@@ -1,0 +1,374 @@
+
+Here is the comprehensive architectural audit, feasibility assessment, and design blueprint for transforming this repository into the **AI Product QA / AI Reality Testing SaaS platform**.
+
+---
+
+### A. Current Architecture Audit
+
+The repository is built on **Next.js 16 (App Router + Turbopack)**, **React 19**, **Drizzle ORM (PostgreSQL)**, **NextAuth v5 (Beta)**, and the **Vercel AI SDK (v7 / Core v4)**.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              CURRENT CODEBASE                               │
+├──────────────────────────┬──────────────────────────────────────────────────┤
+│ Layer                    │ Current Implementation                           │
+├──────────────────────────┼──────────────────────────────────────────────────┤
+│ Routing & App Layout     │ App Router with route groups: (auth) and (chat). │
+│                          │ Single dynamic route: /chat/[id]                 │
+├──────────────────────────┼──────────────────────────────────────────────────┤
+│ Database (Drizzle ORM)   │ Postgres schema: User, Chat, Message_v2,         │
+│                          │ Vote_v2, Document, Suggestion, Stream.           │
+├──────────────────────────┼──────────────────────────────────────────────────┤
+│ Auth                     │ NextAuth v5 credentials + anonymous guest auth.  │
+├──────────────────────────┼──────────────────────────────────────────────────┤
+│ Agent / AI Pipeline      │ Vercel AI SDK streamText with multi-step tools   │
+│                          │ (createDocument, editDocument, getWeather).      │
+├──────────────────────────┼──────────────────────────────────────────────────┤
+│ Workspace UI Layout      │ Left: Chat container (multimodal-input, history) │
+│                          │ Right: Framer Motion artifact side panel.        │
+├──────────────────────────┼──────────────────────────────────────────────────┤
+│ Artifact Types           │ Text essay, Code script, CSV sheet, Image canvas.│
+└──────────────────────────┴──────────────────────────────────────────────────┘
+```
+
+#### Key Architectural Findings:
+1. **The Left/Right Split Workspace Already Exists:**  
+   The template already contains a responsive, animated split-screen layout in [`components/chat/artifact.tsx`](file:///c:/Users/VISHRUTH/litv5/chatbot/components/chat/artifact.tsx) controlled by [`hooks/use-artifact.ts`](file:///c:/Users/VISHRUTH/litv5/chatbot/hooks/use-artifact.ts). When active, it slides open on the right and resizes the chat on the left.
+2. **Custom Stream Protocol Is Already Wired:**  
+   [`lib/ai/tools/create-document.ts`](file:///c:/Users/VISHRUTH/litv5/chatbot/lib/ai/tools/create-document.ts) and [`components/chat/data-stream-handler.tsx`](file:///c:/Users/VISHRUTH/litv5/chatbot/components/chat/data-stream-handler.tsx) use `dataStream.write({ type: 'data-*', data: ... })` to push state changes to the right-hand canvas mid-stream.
+3. **Message Persistence is Fully Typed:**  
+   `Message_v2` stores structured JSON parts (text, reasoning, tool-invocations, tool-results).
+
+---
+
+### B. What Vercel Chatbot Already Gives Us
+
+We can directly reuse over **60% of the foundational infrastructure**:
+
+1. **Authentication & User Isolation:**
+   - Pre-configured NextAuth with anonymous guest sessions and user accounts.
+   - Multi-tenant data isolation (`userId` checks across chats and documents).
+2. **Two-Pane Workspace Layout:**
+   - Framer-motion responsive split pane with drawer behavior on mobile and side-by-side dock on desktop.
+   - SWR cache hydration and synchronized state across windows.
+3. **Resumable Streaming Engine:**
+   - `@ai-sdk/react` + `resumable-stream` with server-sent event (SSE) recovery across network disconnects.
+4. **Interactive Action Rendering:**
+   - Built-in UI components for step-by-step tool execution badges, collapsible reasoning traces, and error toasts.
+5. **Database ORM & Migrations:**
+   - Drizzle ORM setup with clean migration scripts (`lib/db/migrate.ts`) ready to accept testing schemas.
+
+---
+
+### C. What We Need to Add
+
+1. **Project & Target Configuration Layer:**
+   - Ability to define an application under test: Target URL (production, staging, preview, local), default viewport, authentication credentials for the target app, and browser flags.
+2. **Browser Use Cloud Execution Layer:**
+   - Service client to spawn, manage, and reuse persistent Browser Use sessions.
+   - Extraction of the live WebSocket/WebRTC VNC stream URL (`session.liveUrl`) and session recording URLs.
+3. **Right-Hand "Live Reality" Preview Pane:**
+   - Interactive iframe/VNC live browser view replacing the text/code editors.
+   - Action timeline overlaid on top of the live viewport showing real-time agent actions (clicks, inputs, navigations).
+4. **Product QA Orchestrator (Testing Engine):**
+   - A specialized reasoning layer that converts user intents ("Test checkout", "Try invalid credentials") into a structured QA Test Plan (Hypothesis, Steps, Assertions).
+   - Evaluation agent that checks DOM state, network responses, and console logs to yield a verified verdict: `PASS`, `FAIL`, or `UNCERTAIN`.
+5. **Structured Evidence & Finding System:**
+   - Automatic capture of reproduction steps, network failures, console errors, DOM snippets, before/after screenshots, and video replay links.
+   - Exportable Bug Report / QA Finding cards.
+6. **Session-Level Browser Continuity:**
+   - Maintaining browser session state across consecutive chat turns (e.g., Turn 1 logs in; Turn 2 tests settings as that logged-in user without re-authenticating).
+
+---
+
+### D. What We Should NOT Build
+
+To avoid scope creep and deliver a high-velocity V1:
+
+* ❌ **Do NOT build a browser automation engine from scratch.** (No raw Playwright/Puppeteer orchestration servers; rely strictly on Browser Use).
+* ❌ **Do NOT build an autonomous code-generation/PR engine in V1.** (Do not edit customer codebases or execute automated code fixes).
+* ❌ **Do NOT clone customer Git repositories.** (No local repo checkouts, AST parsing, or CI runners).
+* ❌ **Do NOT build a complex multi-agent framework** (No swarm frameworks, AutoGen, or LangGraph abstractions).
+* ❌ **Do NOT build a synthetic persona simulation engine.**
+* ❌ **Do NOT build custom billing or usage meters in V1.**
+
+---
+
+### E. Proposed Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            AI PRODUCT QA ENGINE                             │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+                ┌──────────────────────┴──────────────────────┐
+                ▼                                             ▼
+┌───────────────────────────────┐             ┌───────────────────────────────┐
+│     LEFT PANE: QA AGENT       │             │   RIGHT PANE: LIVE BROWSER    │
+│  - Natural language intent    │             │  - Interactive Live URL (VNC) │
+│  - Plan generation            │             │  - Real-time action overlays  │
+│  - Real-time action stream    │             │  - DevTools / Console pane    │
+│  - Structured QA Finding card │             │  - Video recording playback   │
+└───────────────┬───────────────┘             └───────────────▲───────────────┘
+                │                                             │
+                ▼                                             │
+┌─────────────────────────────────────────────────────────┐   │
+│             ORCHESTRATION & EVALUATION LAYER            │   │
+│ 1. Intent Parser: Objective, Steps, Assertions          │   │
+│ 2. Tool: executeBrowserTask(action, params)             │   │
+│ 3. Tool: evaluateAssertion(expected, actual, evidence)  │   │
+│ 4. Tool: captureEvidence(network, console, screenshot)  │   │
+└───────────────┬─────────────────────────────────────────┘   │
+                │                                             │
+                ▼                                             │
+┌─────────────────────────────────────────────────────────┐   │
+│                BROWSER USE SDK (V3 CLIENT)              │   │
+│  - Persistent Session: client.sessions.create()         ├───┘
+│  - Execution Stream: client.sessions.messages()         │
+│  - Live View URL: session.liveUrl                       │
+│  - Workspace / Files: client.sessions.files()           │
+└─────────────────────────────────────────────────────────┘
+```
+
+#### Architectural Separation of Concerns:
+1. **Browser Execution Layer (Browser Use):** Does the low-level heavy lifting (clicks, keypresses, scrolls, tab management, cookies, screenshots, video encoding).
+2. **QA Intelligence Layer (Our System):** Interprets testing goals, generates test assertions, inspects output diagnostics, validates expected vs. actual results, and determines bug severity.
+3. **Workspace Presentation Layer (Next.js):** Coordinates live visual feedback, streaming progress ticks, and evidence review.
+
+---
+
+### F. Proposed Data Model
+
+Extending the existing Drizzle schema (`lib/db/schema.ts`):
+
+```typescript
+// 1. Projects (Application under test)
+export const project = pgTable("Project", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("userId").notNull().references(() => user.id),
+  name: text("name").notNull(),
+  targetUrl: text("targetUrl").notNull(),
+  environment: varchar("environment", { enum: ["production", "staging", "local"] }).default("staging"),
+  authConfig: json("authConfig"), // optional basic auth, mock accounts
+  githubRepo: varchar("githubRepo", { length: 256 }), // optional: "org/repo"
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
+  updatedAt: timestamp("updatedAt").notNull().defaultNow(),
+});
+
+// 2. QA Test Sessions (Links chat conversation to a persistent browser session)
+export const testSession = pgTable("TestSession", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  chatId: uuid("chatId").notNull().references(() => chat.id, { onDelete: "cascade" }),
+  projectId: uuid("projectId").references(() => project.id, { onDelete: "set null" }),
+  browserSessionId: text("browserSessionId"), // Browser Use Cloud Session ID
+  liveUrl: text("liveUrl"), // Browser Use Live Streaming URL
+  targetUrl: text("targetUrl").notNull(),
+  status: varchar("status", { enum: ["initializing", "active", "evaluating", "completed", "error"] }).default("initializing"),
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
+});
+
+// 3. QA Findings / Bugs
+export const qaFinding = pgTable("QAFinding", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  testSessionId: uuid("testSessionId").notNull().references(() => testSession.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  severity: varchar("severity", { enum: ["critical", "high", "medium", "low", "suggestion"] }).notNull(),
+  verdict: varchar("verdict", { enum: ["pass", "fail", "uncertain"] }).notNull(),
+  expectedResult: text("expectedResult").notNull(),
+  actualResult: text("actualResult").notNull(),
+  reproductionSteps: json("reproductionSteps").notNull(), // Array of step strings
+  evidence: json("evidence").notNull(), // Screenshots, console logs, network errors, DOM traces
+  recordingUrl: text("recordingUrl"),
+  likelyCause: text("likelyCause"),
+  suggestedFix: text("suggestedFix"),
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
+});
+
+// 4. Saved Regression Tests
+export const savedTest = pgTable("SavedTest", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("projectId").notNull().references(() => project.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  objective: text("objective").notNull(),
+  steps: json("steps").notNull(),
+  expectedOutcome: text("expectedOutcome").notNull(),
+  lastRunVerdict: varchar("lastRunVerdict", { enum: ["pass", "fail", "uncertain", "never_run"] }).default("never_run"),
+  lastRunAt: timestamp("lastRunAt"),
+  createdAt: timestamp("createdAt").notNull().defaultNow(),
+});
+```
+
+---
+
+### G. Browser Use Integration Strategy
+
+1. **Session Lifecycle:**
+   - When a test begins or a target URL is provided, call `client.sessions.create({ keepAlive: true })` via Browser Use SDK.
+   - Obtain `session.id` and `session.liveUrl`.
+   - Store `sessionId` in the session context (`TestSession` record) so follow-up chat messages reuse the same browser state, cookies, and page tab.
+2. **Live View Streaming to Right Pane:**
+   - The right pane renders an iframe embedding `session.liveUrl`.
+   - The user watches the agent interact with their actual web app in real time with low latency.
+3. **Execution & Event Streaming to Chat:**
+   - Execute actions on the session.
+   - Stream incremental status events (`data-qa-step`: "Clicked checkout button", "Entered coupon code") to the AI SDK data stream writer, displaying animated checkmarks in the chat.
+4. **Recording & Teardown:**
+   - When the session finishes or the test evaluates, fetch session recordings and snapshots via `client.sessions.files(sessionId)`.
+
+---
+
+### H. GitHub Integration Strategy (Optional Intelligence Layer)
+
+```
+                     ┌─────────────────────────────┐
+                     │     Browser QA Finding      │
+                     │  "Login button fails 500"   │
+                     │  POST /api/auth/callback    │
+                     └──────────────┬──────────────┘
+                                    │
+                         Is GitHub connected?
+                                    │
+                     ┌──────────────┴──────────────┐
+                    YES                            NO
+                     │                             │
+                     ▼                             ▼
+       ┌───────────────────────────┐    ┌────────────────────┐
+       │ Query GitHub API          │    │ Return general web │
+       │ (Fetch /api/auth handler) │    │ architecture cause │
+       └─────────────┬─────────────┘    └────────────────────┘
+                     ▼
+       ┌───────────────────────────┐
+       │ Explain code cause        │
+       │ + draft GitHub Issue      │
+       └───────────────────────────┘
+```
+
+1. **Strictly Non-Intrusive:**  
+   GitHub is only queried **after** a failure is identified to enrich the finding with code context (e.g., matching a failed API route or frontend selector to a file in the repo via the GitHub REST API).
+2. **No Local Cloning:**  
+   Never clone the repo on the server. Read specific tree paths via GitHub Octokit / Contents API using user OAuth tokens.
+3. **Safe Progressive Action:**  
+   Provide a "Create GitHub Issue" button pre-filled with Markdown reproduction steps, screenshots, and logs.
+
+---
+
+### I. V1 MVP Scope
+
+The V1 milestone focuses strictly on the core loop:
+
+* [x] Target URL Input (e.g. `https://example.com`) directly in chat.
+* [x] Persistent Browser Use Cloud session spawned per test run.
+* [x] Split workspace: Left = QA Chat, Right = Live Browser View (`liveUrl`).
+* [x] Step-by-step progress ticks streamed into the chat (`✓ Opened page`, `✓ Entered credentials`, `⚠ Error toast detected`).
+* [x] QA Outcome evaluation: Automated verdict (`PASS` / `FAIL` / `UNCERTAIN`).
+* [x] Structured Finding Summary card with expected vs. actual results and evidence.
+* [x] Stateful follow-up: Continue test in the same browser session without resetting context.
+
+---
+
+### J. V2 / V3 Roadmap
+
+* **V2 (Regression & Memory):**
+  - "Remember as test" button to store successful workflows into `SavedTest`.
+  - Batch test execution (run all saved tests against a new staging URL).
+  - Mobile viewport testing emulation.
+* **V3 (GitHub & CI/CD Intelligence):**
+  - Automatic GitHub issue generation.
+  - Webhook trigger on deployment (Vercel / GitHub Actions preview deployment verification).
+  - Source-code root cause attribution.
+
+---
+
+### K. Major Technical Risks & Mitigations
+
+| Risk | Impact | Mitigation Strategy |
+|---|---|---|
+| **Iframe / Embedding Restrictions (`X-Frame-Options` / CSP)** | Live preview fails to embed in iframe | Browser Use `liveUrl` is served from Browser Use's domain (`live.browser-use.com`) which renders a streaming canvas/VNC stream, bypassing target app CSP headers completely. |
+| **Session Inactivity Timeout** | Long LLM reasoning steps cause the browser session to shut down | Pass `keepAlive: true` and send periodic lightweight health-ping action checks to maintain session warmth during reasoning. |
+| **Test Hallucination (False Passes)** | Agent assumes an action succeeded without verifying DOM | Require explicit two-phase verification: Action Phase (`click`) followed by Assertion Phase (`verify URL / element change`). |
+| **Vercel Serverless Function Timeouts (60s cap)** | Multi-step browser tests take 90s–180s | Delegate long-running execution to background jobs or stream continuous SSE progress packets through Next.js streaming API routes to prevent gateway timeouts. |
+
+---
+
+### L. Implementation Phases
+
+```
+Phase 1: Foundation & Data Layer
+  ├── Extend Drizzle Schema (Project, TestSession, QAFinding)
+  └── Run migrations
+
+Phase 2: Browser Execution Bridge
+  ├── Implement lib/browser-use/client.ts (session management, keepAlive)
+  └── Implement streaming action runner
+
+Phase 3: Right-Pane Live Browser Workspace
+  ├── Create components/qa/browser-preview.tsx (liveUrl iframe + status header)
+  └── Wire useArtifact / workspace state to switch to the Live Browser on test start
+
+Phase 4: QA Agent & Verification Tools
+  ├── Define system prompt for Product QA (test planning, assertion verification)
+  ├── Build QA tools: startTestSession, runBrowserStep, evaluateTestResult
+  └── Implement structured Finding card component (Pass / Fail / Uncertain)
+
+Phase 5: Stateful Continuity & Verification
+  ├── Connect multi-turn session persistence
+  └── End-to-end smoke test on a live application
+```
+
+---
+
+### M. Recommended Folder Structure
+
+```
+├── app/
+│   ├── (chat)/
+│   │   ├── api/
+│   │   │   ├── chat/route.ts        # QA Agent chat orchestration
+│   │   │   └── qa/session/route.ts  # Browser session lifecycle endpoints
+│   │   └── chat/[id]/page.tsx       # Dual-pane QA workspace
+├── components/
+│   ├── chat/                        # Left pane chat components
+│   │   └── message.tsx              # Rich QA step ticks & finding cards
+│   └── qa/                          # Right pane browser & QA components
+│       ├── browser-preview.tsx      # Live VNC stream viewer
+│       ├── action-overlay.tsx       # Live status & action ticker
+│       ├── evidence-drawer.tsx      # Screenshots, console errors, logs
+│       └── finding-card.tsx         # Structured Pass/Fail report card
+├── lib/
+│   ├── ai/
+│   │   ├── prompts.ts               # QA agent system instructions & heuristics
+│   │   └── tools/
+│   │       ├── start-test.ts        # Spawns Browser Use session & docks live view
+│   │       ├── test-step.ts         # Executes action & streams progress ticks
+│   │       └── evaluate-result.ts   # Produces PASS/FAIL verdict & structured evidence
+│   ├── browser-use/
+│   │   ├── client.ts                # Browser Use SDK client singleton
+│   │   └── session-manager.ts       # Active session pooling & keep-alive
+│   └── db/
+│       ├── schema.ts                # Drizzle schema (Projects, Sessions, Findings)
+│       └── queries.ts               # Database helper operations
+```
+
+---
+
+### N. Parts of Existing Template to Keep Untouched
+
+1. **`app/(auth)/*` & NextAuth configuration:** Complete auth system, guest login, and password hashing.
+2. **`components/ui/*`:** Radix UI primitives, buttons, dropdowns, dialogs, command palettes.
+3. **`lib/db/migrate.ts` & database connection pools:** Drizzle postgres connection setup.
+4. **`app/globals.css`:** Clean dark/light theme tokens and typography.
+
+---
+
+### O. Parts That Should Be Replaced
+
+1. **Existing Artifact Editors (`artifacts/code`, `artifacts/sheet`, `artifacts/image`):**  
+   Replace with the **`BrowserPreview`** component representing the live application under test.
+2. **Default Chatbot Prompts (`lib/ai/prompts.ts`):**  
+   Replace generic conversational prompts with the **QA Test Planner & Evaluator Prompt**.
+3. **Sample Tools (`get-weather.ts`, `document-handlers`):**  
+   Replace with QA testing tools (`startTestSession`, `runBrowserStep`, `assertCondition`, `generateFinding`).
+
+---
+
+*This blueprint provides the complete architectural roadmap. No changes have been implemented yet, in accordance with your instructions. Let me know when you are ready to begin Phase 1.*

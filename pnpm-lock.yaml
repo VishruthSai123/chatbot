@@ -77,6 +77,9 @@ importers:
       botid:
         specifier: ^1.5.11
         version: 1.5.11(next@16.2.10(@opentelemetry/api@1.9.1)(@playwright/test@1.61.1)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
+      browser-use-sdk:
+        specifier: ^3.11.3
+        version: 3.11.3
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -2515,6 +2518,20 @@ packages:
   brace-expansion@5.0.12:
     resolution: {integrity: sha512-YovQ3rzhaLMIrDjNDMkNS01tea93qhEhG5xy8f6+R0l+dw3Ki+5sCoIoI942iuLZTHWogWktgwVDhU09iNEimQ==}
     engines: {node: 20 || >=22}
+
+  browser-use-sdk@3.11.3:
+    resolution: {integrity: sha512-lVOHeyB/Bh9h5kPtxqgZ+nYmY6OJWYtGgeovLs0jHUrsIfIlFZ0YXEkL99Y8X1SlYQyzcEYTDLpxvkiHBQpWvw==}
+    peerDependencies:
+      '@x402/evm': ^2.20.0
+      '@x402/fetch': ^2.20.0
+      viem: ^2.55.10
+    peerDependenciesMeta:
+      '@x402/evm':
+        optional: true
+      '@x402/fetch':
+        optional: true
+      viem:
+        optional: true
 
   buffer-from@1.1.2:
     resolution: {integrity: sha512-E+XQCRwSbaaiChtv6k6Dwgc+bx+Bs6vuKJHHl5kox/BaKbhiXzqQOwK4cO22yElGp2OCmjwVhT3HmxgyPGnJfQ==}
@@ -6567,6 +6584,11 @@ snapshots:
   brace-expansion@5.0.12:
     dependencies:
       balanced-match: 4.0.4
+
+  browser-use-sdk@3.11.3:
+    dependencies:
+      dotenv: 17.4.2
+      zod: 4.4.3
 
   buffer-from@1.1.2: {}
 

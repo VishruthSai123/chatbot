@@ -41,6 +41,7 @@
     "ai": "7.0.15",
     "bcrypt-ts": "^8.0.1",
     "botid": "^1.5.11",
+    "browser-use-sdk": "^3.11.3",
     "class-variance-authority": "^0.7.1",
     "classnames": "^2.5.1",
     "clsx": "^2.1.1",

@@ -1,0 +1,142 @@
+Ran command: `powershell -Command "Select-String -Path 'package.json' -Pattern 'browser-use-sdk'"`
+Ran command: `powershell -Command "Select-String -Path '.env*' -Pattern 'BROWSER_USE_API_KEY'"`
+Ran command: `powershell -Command "Select-String -Path 'C:\Users\VISHRUTH\litv4\chat-ui-example\.env' -Pattern 'BROWSER_USE_API_KEY'"`
+Ran command: `powershell -Command "Get-Content 'lib/db/migrate.ts'"`
+
+Here is the step-by-step implementation plan based on the architectural blueprint in [prod.txt](file:///c:/Users/VISHRUTH/litv5/chatbot/prod.txt). 
+
+Each phase is self-contained with a **Verification Gate** to ensure the build remains stable at every step.
+
+---
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       ROADMAP TO THE FIRST MILESTONE                        │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Phase 1: Foundation, Dependencies & Database Schema                         │
+│ Phase 2: Browser Use Cloud Execution Bridge                                 │
+│ Phase 3: Right-Pane Live Reality Workspace (Live Browser)                   │
+│ Phase 4: QA Reasoning Engine, Prompts & Testing Tools                       │
+│ Phase 5: Action Ticks, Finding Cards & Multi-Turn Session Continuity        │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Phase 1: Foundation, Dependencies & Database Schema
+
+**Objective:** Wire credentials, install the Browser Use SDK, extend Drizzle ORM with the QA testing models, and run migrations.
+
+#### Steps:
+1. **Copy API Key:**
+   - Add `BROWSER_USE_API_KEY=bu_Rt6-mUVGgcqFjloFxsirxZdoT33XO5DHG3S8DEdV-fs` to [`c:\Users\VISHRUTH\litv5\chatbot\.env.local`](file:///c:/Users/VISHRUTH/litv5/chatbot/.env.local).
+2. **Install Browser Use SDK:**
+   - Execute `pnpm add browser-use-sdk` in `c:\Users\VISHRUTH\litv5\chatbot`.
+3. **Database Schema Extension:**
+   - In [`lib/db/schema.ts`](file:///c:/Users/VISHRUTH/litv5/chatbot/lib/db/schema.ts), define the QA tables:
+     - `Project`: Stores target URLs, environment (prod/staging/local), and optional auth/repo details.
+     - `TestSession`: Links a `chatId` to a `browserSessionId`, `liveUrl`, and `targetUrl`.
+     - `QAFinding`: Stores the structured result (`verdict`: pass/fail/uncertain, `expectedResult`, `actualResult`, `reproductionSteps`, `evidence`, `severity`).
+4. **Data Access Queries:**
+   - In [`lib/db/queries.ts`](file:///c:/Users/VISHRUTH/litv5/chatbot/lib/db/queries.ts), implement helper functions:
+     - `createTestSession()`, `getTestSessionByChatId()`, `updateTestSessionStatus()`
+     - `saveQAFinding()`, `getQAFindingsBySessionId()`
+5. **Generate & Run Migrations:**
+   - Run `pnpm db:generate` followed by `pnpm db:migrate`.
+
+> **Verification Gate 1:** Database migration applies cleanly. `browser-use-sdk` imports without type errors. `pnpm build` passes.
+
+---
+
+### Phase 2: Browser Use Cloud Execution Bridge
+
+**Objective:** Build a robust service layer to initialize, control, and stream sessions from Browser Use.
+
+#### Steps:
+1. **SDK Singleton:**
+   - Create `lib/browser-use/client.ts` to export an authenticated Browser Use client instance with error handling for missing API keys.
+2. **Session Manager:**
+   - Create `lib/browser-use/session.ts` with helper methods:
+     - `getOrCreateBrowserSession(chatId, targetUrl)`: Returns an existing warm session or creates a new one with `keepAlive: true`.
+     - `dispatchBrowserTask(sessionId, taskInstruction)`: Dispatches an action (navigation, click, type) and returns execution updates.
+     - `fetchSessionEvidence(sessionId)`: Retrieves recordings and artifacts from `client.sessions.files(sessionId)`.
+
+> **Verification Gate 2:** A test script creates a Browser Use session, visits a website, and retrieves a valid `liveUrl` without errors.
+
+---
+
+### Phase 3: Right-Pane Live Reality Workspace
+
+**Objective:** Replace the static document/code canvas with a real-time live browser preview panel.
+
+#### Steps:
+1. **Create Live Browser Component:**
+   - Create `components/qa/browser-preview.tsx`:
+     - **Header Bar:** Displays the target URL, live connection badge (🟢 Live), and viewport selector.
+     - **Main Viewport:** High-performance `iframe` rendering `session.liveUrl` with an interactive loading state.
+     - **Action Ticker:** A discreet overlay at the bottom showing the currently executing step (e.g. `Clicking "Add to Cart"`).
+2. **Add 'Browser' Artifact Definition:**
+   - In [`components/chat/artifact.tsx`](file:///c:/Users/VISHRUTH/litv5/chatbot/components/chat/artifact.tsx), register a new `browser` artifact kind pointing to `BrowserPreview`.
+3. **Data Stream Integration:**
+   - In [`components/chat/data-stream-handler.tsx`](file:///c:/Users/VISHRUTH/litv5/chatbot/components/chat/data-stream-handler.tsx), handle `data-browser-session` events so the right-side pane docks open automatically as soon as the agent starts a browser session.
+
+> **Verification Gate 3:** Starting a test session in the chat triggers the right-hand panel to slide open and embed the active Browser Use live stream.
+
+---
+
+### Phase 4: QA Reasoning Engine, Prompts & Testing Tools
+
+**Objective:** Transform the conversational agent into a QA Reality Testing specialist.
+
+#### Steps:
+1. **QA System Instructions:**
+   - In [`lib/ai/prompts.ts`](file:///c:/Users/VISHRUTH/litv5/chatbot/lib/ai/prompts.ts), write the **Product QA Agent System Prompt**:
+     - Instructs the AI to act as a rigorous QA engineer.
+     - Outlines the testing workflow: Formulate Test Plan → Execute Steps via Browser Use → Observe DOM & Network → Verify Assertions → Produce Verdict.
+2. **Create Core QA Tools:**
+   - In `lib/ai/tools/`:
+     - `startQASession.ts`: Identifies the target URL, spins up the browser session, and signals the UI to open the live view.
+     - `runBrowserStep.ts`: Sends high-level actions to the browser session and streams step progress.
+     - `evaluateTestResult.ts`: Produces the structured `PASS` / `FAIL` / `UNCERTAIN` verdict, saves the `QAFinding` record, and returns the result.
+3. **Wire Route Tools:**
+   - In [`app/(chat)/api/chat/route.ts`](file:///c:/Users/VISHRUTH/litv5/chatbot/app/(chat)/api/chat/route.ts):
+     - Remove sample tools (`getWeather`, `createDocument`, `editDocument`).
+     - Mount the new QA testing tools (`startQASession`, `runBrowserStep`, `evaluateTestResult`).
+
+> **Verification Gate 4:** User enters `"Test the search function on https://news.ycombinator.com"`. The agent opens the browser, types into the search box, verifies the results page, and provides an evaluation.
+
+---
+
+### Phase 5: Action Ticks, Finding Cards & Multi-Turn Continuity
+
+**Objective:** Refine the user experience with Lovable-style visual feedback and maintain browser state across messages.
+
+#### Steps:
+1. **Visual Step Ticks in Chat:**
+   - Create `components/qa/action-tick.tsx`:
+     - `✓ Opened page`
+     - `✓ Located element`
+     - `⏳ Entering input...`
+     - `⚠ Unexpected response`
+2. **Structured QA Finding Card:**
+   - Create `components/qa/finding-card.tsx`:
+     - Badge: `PASS` (Green), `FAIL` (Red), or `UNCERTAIN` (Amber).
+     - Breakdown: **Objective**, **Expected Outcome**, **Actual Result**.
+     - Collapsible **Reproduction Steps** and **Evidence** (screenshots, console errors, video link).
+3. **Multi-Turn Continuity:**
+   - In [`app/(chat)/api/chat/route.ts`](file:///c:/Users/VISHRUTH/litv5/chatbot/app/(chat)/api/chat/route.ts), retrieve the active `TestSession` for the current `chatId`.
+   - Subsequent user messages (e.g. `"Now try submitting with an empty field"`) continue in the same browser session without resetting cookies or reloading from scratch.
+
+> **Verification Gate 5 (Full Milestone 1 Acceptance):**
+> 1. User enters: `"Test login on https://example.com"`.
+> 2. Live browser displays in the right pane.
+> 3. Real-time action ticks appear in the left chat.
+> 4. Finding card is generated with a clear verdict.
+> 5. User replies: `"Now try with invalid credentials"`.
+> 6. The session continues seamlessly in the same browser tab.
+
+---
+
+### Ready to proceed?
+
+If this plan looks solid, we will start with **Phase 1: Foundation, Dependencies & Database Schema**.

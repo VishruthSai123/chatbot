@@ -24,9 +24,11 @@ import {
   type DBMessage,
   document,
   message,
+  qaFinding,
   type Suggestion,
   stream,
   suggestion,
+  testSession,
   type User,
   user,
   vote,
@@ -585,6 +587,146 @@ export async function getStreamIdsByChatId({ chatId }: { chatId: string }) {
       .execute();
 
     return streamIds.map(({ id }) => id);
+  } catch (error) {
+    throw new ChatbotError("bad_request:database", { cause: error });
+  }
+}
+
+export async function createTestSession({
+  chatId,
+  targetUrl,
+  projectId,
+  browserSessionId,
+  liveUrl,
+}: {
+  chatId: string;
+  targetUrl: string;
+  projectId?: string;
+  browserSessionId?: string;
+  liveUrl?: string;
+}) {
+  try {
+    const [created] = await db
+      .insert(testSession)
+      .values({
+        browserSessionId,
+        chatId,
+        createdAt: new Date(),
+        liveUrl,
+        projectId,
+        status: "initializing",
+        targetUrl,
+        updatedAt: new Date(),
+      })
+      .returning();
+    return created;
+  } catch (error) {
+    throw new ChatbotError("bad_request:database", { cause: error });
+  }
+}
+
+export async function getTestSessionByChatId({ chatId }: { chatId: string }) {
+  try {
+    const [session] = await db
+      .select()
+      .from(testSession)
+      .where(eq(testSession.chatId, chatId))
+      .orderBy(desc(testSession.createdAt))
+      .limit(1);
+    return session ?? null;
+  } catch (error) {
+    throw new ChatbotError("bad_request:database", { cause: error });
+  }
+}
+
+export async function updateTestSessionStatus({
+  id,
+  status,
+  browserSessionId,
+  liveUrl,
+}: {
+  id: string;
+  status: "initializing" | "active" | "evaluating" | "completed" | "error";
+  browserSessionId?: string;
+  liveUrl?: string;
+}) {
+  try {
+    const [updated] = await db
+      .update(testSession)
+      .set({
+        status,
+        ...(browserSessionId ? { browserSessionId } : {}),
+        ...(liveUrl ? { liveUrl } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(testSession.id, id))
+      .returning();
+    return updated;
+  } catch (error) {
+    throw new ChatbotError("bad_request:database", { cause: error });
+  }
+}
+
+export async function saveQAFinding({
+  testSessionId,
+  title,
+  severity,
+  verdict,
+  expectedResult,
+  actualResult,
+  reproductionSteps,
+  evidence,
+  recordingUrl,
+  likelyCause,
+  suggestedFix,
+}: {
+  testSessionId: string;
+  title: string;
+  severity: "critical" | "high" | "medium" | "low" | "suggestion";
+  verdict: "pass" | "fail" | "uncertain";
+  expectedResult: string;
+  actualResult: string;
+  reproductionSteps: unknown;
+  evidence: unknown;
+  recordingUrl?: string;
+  likelyCause?: string;
+  suggestedFix?: string;
+}) {
+  try {
+    const [finding] = await db
+      .insert(qaFinding)
+      .values({
+        actualResult,
+        createdAt: new Date(),
+        evidence,
+        expectedResult,
+        likelyCause,
+        recordingUrl,
+        reproductionSteps,
+        severity,
+        suggestedFix,
+        testSessionId,
+        title,
+        verdict,
+      })
+      .returning();
+    return finding;
+  } catch (error) {
+    throw new ChatbotError("bad_request:database", { cause: error });
+  }
+}
+
+export async function getQAFindingsBySessionId({
+  testSessionId,
+}: {
+  testSessionId: string;
+}) {
+  try {
+    return await db
+      .select()
+      .from(qaFinding)
+      .where(eq(qaFinding.testSessionId, testSessionId))
+      .orderBy(asc(qaFinding.createdAt));
   } catch (error) {
     throw new ChatbotError("bad_request:database", { cause: error });
   }
