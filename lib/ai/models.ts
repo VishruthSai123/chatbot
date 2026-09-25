@@ -1,6 +1,6 @@
 export const DEFAULT_CHAT_MODEL = "google/gemini-1.5-flash";
 
-export const titleModel = {
+export const titleModel: ChatModel = {
   description: "Fast model for title generation",
   id: "google/gemini-1.5-flash",
   name: "Gemini 1.5 Flash",
