@@ -1,9 +1,9 @@
-export const DEFAULT_CHAT_MODEL = "google/gemini-1.5-flash";
+export const DEFAULT_CHAT_MODEL = "google/gemini-3.1-flash-lite";
 
 export const titleModel: ChatModel = {
   description: "Fast model for title generation",
-  id: "google/gemini-1.5-flash",
-  name: "Gemini 1.5 Flash",
+  id: "google/gemini-3.1-flash-lite",
+  name: "Gemini 3.1 Flash Lite",
   provider: "google",
 };
 
@@ -59,6 +59,12 @@ export const chatModels: ChatModel[] = [
     id: "xai/grok-4.1-fast-non-reasoning",
     name: "Grok 4.1 Fast",
     provider: "xai",
+  },
+  {
+    description: "Google Gemini 3.1 Flash Lite",
+    id: "google/gemini-3.1-flash-lite",
+    name: "Gemini 3.1 Flash Lite",
+    provider: "google",
   },
   {
     description: "Google Gemini Flash Lite",
