@@ -21,7 +21,7 @@
   "dependencies": {
     "@ai-sdk/google": "^4.0.80",
     "@ai-sdk/otel": "^1.0.15",
-    "@ai-sdk/provider": "^4.0.2",
+    "@ai-sdk/provider": "^4.0.18",
     "@ai-sdk/react": "4.0.16",
     "@codemirror/lang-python": "^6.2.1",
     "@codemirror/state": "^6.7.0",

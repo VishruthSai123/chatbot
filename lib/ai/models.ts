@@ -2,10 +2,9 @@ export const DEFAULT_CHAT_MODEL = "google/gemini-1.5-flash";
 
 export const titleModel = {
   description: "Fast model for title generation",
-  gatewayOrder: ["fireworks", "bedrock"],
-  id: "moonshotai/kimi-k2.5",
-  name: "Kimi K2.5",
-  provider: "moonshotai",
+  id: "google/gemini-1.5-flash",
+  name: "Gemini 1.5 Flash",
+  provider: "google",
 };
 
 export type ModelCapabilities = {

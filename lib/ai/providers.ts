@@ -34,5 +34,8 @@ export function getTitleModel() {
   if (isTestEnvironment && myProvider) {
     return myProvider.languageModel("title-model");
   }
+  if (titleModel.id.startsWith("google/")) {
+    return google(titleModel.id.replace("google/", ""));
+  }
   return gateway.languageModel(titleModel.id);
 }
