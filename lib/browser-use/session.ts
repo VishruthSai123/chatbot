@@ -5,6 +5,16 @@ import {
 } from "@/lib/db/queries";
 import { getBrowserUseClient, type TaskStepView } from "./client";
 
+function isSameTarget(urlA: string, urlB: string): boolean {
+  try {
+    const a = new URL(urlA);
+    const b = new URL(urlB);
+    return a.origin.toLowerCase() === b.origin.toLowerCase();
+  } catch {
+    return urlA.trim().toLowerCase() === urlB.trim().toLowerCase();
+  }
+}
+
 export interface ActiveBrowserSession {
   browserSessionId: string;
   id: string;
@@ -49,22 +59,43 @@ export async function getOrCreateBrowserSession({
     existing.status !== "completed" &&
     existing.status !== "error"
   ) {
-    try {
-      const liveSession = await client.sessions.get(existing.browserSessionId);
-      if (liveSession && liveSession.status === "active") {
-        return {
-          browserSessionId: existing.browserSessionId,
-          id: existing.id,
-          isExisting: true,
-          liveUrl: liveSession.liveUrl ?? existing.liveUrl ?? null,
-          targetUrl: existing.targetUrl,
-        };
+    const sameTarget = isSameTarget(existing.targetUrl, targetUrl);
+
+    if (sameTarget) {
+      // Reuse existing active session for the same target application
+      try {
+        const liveSession = await client.sessions.get(
+          existing.browserSessionId
+        );
+        if (liveSession && liveSession.status === "active") {
+          return {
+            browserSessionId: existing.browserSessionId,
+            id: existing.id,
+            isExisting: true,
+            liveUrl: liveSession.liveUrl ?? existing.liveUrl ?? null,
+            targetUrl: existing.targetUrl,
+          };
+        }
+      } catch (checkError) {
+        console.warn(
+          `[BrowserUse] Failed to query existing session ${existing.browserSessionId}, creating fresh session:`,
+          checkError
+        );
       }
-    } catch (checkError) {
-      console.warn(
-        `[BrowserUse] Failed to query existing session ${existing.browserSessionId}, creating fresh session:`,
-        checkError
+    } else {
+      // Target changed: terminate old cloud session cleanly to prevent resource leak
+      console.log(
+        `[BrowserUse] Target application changed from ${existing.targetUrl} to ${targetUrl}. Stopping old session ${existing.browserSessionId}...`
       );
+      try {
+        await client.sessions.stop(existing.browserSessionId);
+      } catch (err) {
+        console.warn("[BrowserUse] Error stopping previous session:", err);
+      }
+      await updateTestSessionStatus({
+        id: existing.id,
+        status: "completed",
+      });
     }
   }
 
@@ -82,29 +113,25 @@ export async function getOrCreateBrowserSession({
   const browserSessionId = newCloudSession.id;
   const liveUrl = newCloudSession.liveUrl ?? null;
 
-  // 3. Persist session link to Drizzle ORM
-  let dbSessionId = existing?.id;
-  if (!dbSessionId) {
-    const created = await createTestSession({
-      browserSessionId,
-      chatId,
-      liveUrl: liveUrl ?? undefined,
-      projectId,
-      targetUrl,
-    });
-    dbSessionId = created.id;
-  }
+  // 3. Persist new session link to Drizzle ORM
+  const created = await createTestSession({
+    browserSessionId,
+    chatId,
+    liveUrl: liveUrl ?? undefined,
+    projectId,
+    targetUrl,
+  });
 
   await updateTestSessionStatus({
     browserSessionId,
-    id: dbSessionId,
+    id: created.id,
     liveUrl: liveUrl ?? undefined,
     status: "active",
   });
 
   return {
     browserSessionId,
-    id: dbSessionId,
+    id: created.id,
     isExisting: false,
     liveUrl,
     targetUrl,

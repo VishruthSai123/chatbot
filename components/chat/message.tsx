@@ -1,6 +1,7 @@
 "use client";
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { useCallback } from "react";
+import { FindingCard } from "@/components/qa/finding-card";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
@@ -335,6 +336,158 @@ const PurePreviewMessage = ({
             )}
           </ToolContent>
         </Tool>
+      );
+    }
+
+    if (type === "tool-startTestSession") {
+      const { toolCallId, state } = part;
+      return (
+        <div className="w-[min(100%,450px)]" key={toolCallId}>
+          <Tool className="w-full" defaultOpen={true}>
+            <ToolHeader state={state} type="tool-startTestSession" />
+            <ToolContent>
+              {state === "input-available" && <ToolInput input={part.input} />}
+              {state === "output-available" && (
+                <ToolOutput
+                  errorText={
+                    part.output && "error" in part.output
+                      ? String(part.output.error)
+                      : undefined
+                  }
+                  output={
+                    part.output && "error" in part.output ? null : (
+                      <div className="flex items-center gap-2 px-1 py-1.5 text-xs">
+                        <span className="size-2 rounded-full bg-emerald-500" />
+                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                          Browser session{" "}
+                          {part.output?.status === "reused"
+                            ? "reused"
+                            : "created"}
+                        </span>
+                        {part.output?.targetUrl ? (
+                          <span className="truncate text-muted-foreground">
+                            — {String(part.output.targetUrl)}
+                          </span>
+                        ) : null}
+                      </div>
+                    )
+                  }
+                />
+              )}
+            </ToolContent>
+          </Tool>
+        </div>
+      );
+    }
+
+    if (type === "tool-runBrowserStep") {
+      const { toolCallId, state } = part;
+      return (
+        <div className="w-[min(100%,450px)]" key={toolCallId}>
+          <Tool className="w-full" defaultOpen={true}>
+            <ToolHeader state={state} type="tool-runBrowserStep" />
+            <ToolContent>
+              {state === "input-available" && <ToolInput input={part.input} />}
+              {state === "output-available" && (
+                <ToolOutput
+                  errorText={
+                    part.output && "error" in part.output
+                      ? String(part.output.error)
+                      : undefined
+                  }
+                  output={
+                    part.output && !("error" in part.output) ? (
+                      <div className="flex items-center gap-2 px-1 py-1.5 text-xs">
+                        <span
+                          className={cn(
+                            "size-2 rounded-full",
+                            part.output?.success
+                              ? "bg-emerald-500"
+                              : "bg-red-500"
+                          )}
+                        />
+                        <span
+                          className={cn(
+                            "font-medium",
+                            part.output?.success
+                              ? "text-emerald-600 dark:text-emerald-400"
+                              : "text-red-600 dark:text-red-400"
+                          )}
+                        >
+                          {part.output?.success
+                            ? "Completed"
+                            : "Task encountered issues"}
+                        </span>
+                        {part.output?.stepCount ? (
+                          <span className="text-muted-foreground">
+                            — {part.output.stepCount} steps
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null
+                  }
+                />
+              )}
+            </ToolContent>
+          </Tool>
+        </div>
+      );
+    }
+
+    if (type === "tool-evaluateTestResult") {
+      const { toolCallId, state } = part;
+      return (
+        <div className="w-[min(100%,500px)]" key={toolCallId}>
+          {state === "output-available" &&
+          part.output &&
+          !("error" in part.output) ? (
+            <FindingCard
+              finding={{
+                actual: String(part.output.actual ?? ""),
+                evidence: Array.isArray(part.output.evidence)
+                  ? (part.output.evidence as any)
+                  : [],
+                expected: String(part.output.expected ?? ""),
+                findingId: part.output.findingId
+                  ? String(part.output.findingId)
+                  : null,
+                reproductionSteps: Array.isArray(part.output.reproductionSteps)
+                  ? (part.output.reproductionSteps as string[])
+                  : [],
+                severity: part.output.severity
+                  ? String(part.output.severity)
+                  : "medium",
+                status:
+                  (part.output.status as
+                    | "pass"
+                    | "fail"
+                    | "uncertain"
+                    | "blocked") ?? "uncertain",
+                summary: String(part.output.summary ?? ""),
+                title: String(part.output.title ?? "Test Result"),
+              }}
+            />
+          ) : (
+            <Tool className="w-full" defaultOpen={true}>
+              <ToolHeader state={state} type="tool-evaluateTestResult" />
+              <ToolContent>
+                {state === "input-available" && (
+                  <ToolInput input={part.input} />
+                )}
+                {state === "output-available" && (
+                  <ToolOutput
+                    errorText={
+                      part.output && "error" in part.output
+                        ? String(part.output.error)
+                        : undefined
+                    }
+                    output={part.output}
+                  />
+                )}
+              </ToolContent>
+            </Tool>
+          )}
+        </div>
       );
     }
 

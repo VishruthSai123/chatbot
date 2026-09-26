@@ -24,9 +24,13 @@ import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
 import { getLanguageModel } from "@/lib/ai/providers";
 import { createDocument } from "@/lib/ai/tools/create-document";
 import { editDocument } from "@/lib/ai/tools/edit-document";
+import { evaluateTestResult } from "@/lib/ai/tools/evaluate-test-result";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
+import { runBrowserStep } from "@/lib/ai/tools/run-browser-step";
+import { startTestSession } from "@/lib/ai/tools/start-test-session";
 import { updateDocument } from "@/lib/ai/tools/update-document";
+import { stopBrowserSession } from "@/lib/browser-use/session";
 import { isProductionEnvironment } from "@/lib/constants";
 import {
   createStreamId,
@@ -47,7 +51,7 @@ import { convertToUIMessages, generateUUID } from "@/lib/utils";
 import { generateTitleFromUserMessage } from "../../actions";
 import { type PostRequestBody, postRequestBodySchema } from "./schema";
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const HEALTH_CHECK_DELAY_MS = 9000;
 
@@ -276,6 +280,9 @@ export async function POST(request: Request) {
                   "editDocument",
                   "updateDocument",
                   "requestSuggestions",
+                  "startTestSession",
+                  "runBrowserStep",
+                  "evaluateTestResult",
                 ],
           instructions: systemPrompt({ requestHints, supportsTools }),
           messages: modelMessages,
@@ -302,7 +309,7 @@ export async function POST(request: Request) {
               openai: { reasoningEffort: modelConfig.reasoningEffort },
             }),
           },
-          stopWhen: isStepCount(5),
+          stopWhen: isStepCount(10),
           telemetry: {
             functionId: "stream-text",
             isEnabled: isProductionEnvironment,
@@ -314,11 +321,20 @@ export async function POST(request: Request) {
               session,
             }),
             editDocument: editDocument({ dataStream, session }),
+            evaluateTestResult: evaluateTestResult({
+              chatId: id,
+              dataStream,
+            }),
             getWeather,
             requestSuggestions: requestSuggestions({
               dataStream,
               modelId: chatModel,
               session,
+            }),
+            runBrowserStep: runBrowserStep({ dataStream }),
+            startTestSession: startTestSession({
+              chatId: id,
+              dataStream,
             }),
             updateDocument: updateDocument({
               dataStream,
@@ -463,6 +479,11 @@ export async function DELETE(request: Request) {
   if (chat?.userId !== session.user.id) {
     return new ChatbotError("forbidden:chat").toResponse();
   }
+
+  // Terminate any active Browser Use cloud session before deleting chat
+  await stopBrowserSession({ chatId: id }).catch((err) => {
+    console.warn(`[BrowserUse] Error stopping session for chat ${id}:`, err);
+  });
 
   const deletedChat = await deleteChatById({ id });
 

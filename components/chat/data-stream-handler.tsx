@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useSWRConfig } from "swr";
 import { unstable_serialize } from "swr/infinite";
+import { browserArtifact } from "@/artifacts/browser/client";
 import { initialArtifactData, useArtifact } from "@/hooks/use-artifact";
 import { artifactDefinitions } from "./artifact";
 import { useDataStream } from "./data-stream-provider";
@@ -27,10 +28,16 @@ export function DataStreamHandler() {
         mutate(unstable_serialize(getChatHistoryPaginationKey));
         continue;
       }
-      const artifactDefinition = artifactDefinitions.find(
-        (currentArtifactDefinition) =>
-          currentArtifactDefinition.kind === artifact.kind
-      );
+      const isBrowserStreamPart =
+        delta.type.startsWith("data-browser-") ||
+        delta.type.startsWith("data-qa-");
+
+      const artifactDefinition = isBrowserStreamPart
+        ? browserArtifact
+        : artifactDefinitions.find(
+            (currentArtifactDefinition) =>
+              currentArtifactDefinition.kind === artifact.kind
+          );
 
       if (artifactDefinition?.onStreamPart) {
         artifactDefinition.onStreamPart({
@@ -46,6 +53,22 @@ export function DataStreamHandler() {
         }
 
         switch (delta.type) {
+          case "data-browser-session": {
+            const session = delta.data as {
+              id?: string;
+              targetUrl?: string;
+              liveUrl?: string;
+            };
+            return {
+              ...draftArtifact,
+              documentId: session.id ?? draftArtifact.documentId,
+              isVisible: true,
+              kind: "browser",
+              status: "streaming",
+              title: session.targetUrl || "Live Browser",
+            };
+          }
+
           case "data-id":
             return {
               ...draftArtifact,

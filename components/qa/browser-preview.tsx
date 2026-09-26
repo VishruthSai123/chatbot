@@ -11,6 +11,7 @@ import {
   Maximize2,
   Minimize2,
   RotateCw,
+  Square,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -144,6 +145,28 @@ export function BrowserPreview({
     mutateSession();
   }, [mutateSession]);
 
+  const [isStopping, setIsStopping] = useState(false);
+
+  const handleStopSession = useCallback(async () => {
+    if (!chatId || isStopping) {
+      return;
+    }
+    setIsStopping(true);
+    try {
+      await fetch(`/api/qa/session?chatId=${chatId}`, { method: "DELETE" });
+      mutateSession();
+      setMetadata?.((prev) => ({
+        ...prev,
+        currentAction: "Session stopped by user",
+        status: "stopped",
+      }));
+    } catch (err) {
+      console.error("[BrowserPreview] Error stopping session:", err);
+    } finally {
+      setIsStopping(false);
+    }
+  }, [chatId, isStopping, mutateSession, setMetadata]);
+
   const handleOpenExternal = useCallback(() => {
     if (liveUrl) {
       window.open(liveUrl, "_blank", "noopener,noreferrer");
@@ -261,6 +284,24 @@ export function BrowserPreview({
               {isFullscreen ? "Exit fullscreen" : "Fullscreen"}
             </TooltipContent>
           </Tooltip>
+
+          {(status === "live" || status === "working") && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  aria-label="Stop browser session"
+                  className="size-7 text-muted-foreground hover:text-destructive"
+                  disabled={isStopping}
+                  onClick={handleStopSession}
+                  size="icon"
+                  variant="ghost"
+                >
+                  <Square className="size-3 fill-current" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Stop browser session</TooltipContent>
+            </Tooltip>
+          )}
 
           <Tooltip>
             <TooltipTrigger asChild>
