@@ -35,7 +35,7 @@ export const artifactDefinitions = [
   imageArtifact,
   sheetArtifact,
 ];
-export type ArtifactKind = (typeof artifactDefinitions)[number]["kind"];
+export type ArtifactKind = "text" | "code" | "image" | "sheet" | "browser";
 
 export type UIArtifact = {
   title: string;

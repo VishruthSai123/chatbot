@@ -34,6 +34,22 @@ export type WaitingStatusData = {
   modelName: string;
 };
 
+export type BrowserSessionStreamData = {
+  id?: string;
+  browserSessionId: string;
+  liveUrl: string;
+  targetUrl: string;
+  status?: string;
+};
+
+export type QAStepStreamData = {
+  number?: number;
+  action: string;
+  goal?: string;
+  url?: string;
+  status?: "running" | "completed" | "failed";
+};
+
 export type CustomUIDataTypes = {
   textDelta: string;
   imageDelta: string;
@@ -48,6 +64,9 @@ export type CustomUIDataTypes = {
   finish: null;
   "chat-title": string;
   "waiting-status": WaitingStatusData;
+  "browser-session": BrowserSessionStreamData;
+  "qa-step": QAStepStreamData;
+  "qa-status": string;
 };
 
 export type ChatMessage = UIMessage<
