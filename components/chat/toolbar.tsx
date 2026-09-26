@@ -418,9 +418,10 @@ const PureToolbar = ({
     setMessages((messages) => messages);
   }, [setMessages, stop]);
 
-  const artifactDefinition = artifactDefinitions.find(
-    (definition) => definition.kind === artifactKind
-  );
+  const artifactDefinition =
+    artifactDefinitions.find(
+      (definition) => definition.kind === artifactKind
+    ) ?? artifactDefinitions[0];
 
   if (!artifactDefinition) {
     throw new Error("Artifact definition not found!");

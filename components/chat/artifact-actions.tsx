@@ -84,9 +84,10 @@ function PureArtifactActions({
 }: ArtifactActionsProps) {
   const [isLoading, setIsLoading] = useState(false);
 
-  const artifactDefinition = artifactDefinitions.find(
-    (definition) => definition.kind === artifact.kind
-  );
+  const artifactDefinition =
+    artifactDefinitions.find(
+      (definition) => definition.kind === artifact.kind
+    ) ?? artifactDefinitions[0];
 
   if (!artifactDefinition) {
     throw new Error("Artifact definition not found!");

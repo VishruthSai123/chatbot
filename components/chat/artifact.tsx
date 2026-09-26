@@ -13,6 +13,7 @@ import {
 } from "react";
 import useSWR, { useSWRConfig } from "swr";
 import { useWindowSize } from "usehooks-ts";
+import { browserArtifact } from "@/artifacts/browser/client";
 import { codeArtifact } from "@/artifacts/code/client";
 import { imageArtifact } from "@/artifacts/image/client";
 import { sheetArtifact } from "@/artifacts/sheet/client";
@@ -34,6 +35,7 @@ export const artifactDefinitions = [
   codeArtifact,
   imageArtifact,
   sheetArtifact,
+  browserArtifact,
 ];
 export type ArtifactKind = "text" | "code" | "image" | "sheet" | "browser";
 
@@ -289,9 +291,10 @@ function PureArtifact({
   const { width: windowWidth, height: windowHeight } = useWindowSize();
   const isMobile = windowWidth ? windowWidth < 768 : false;
 
-  const artifactDefinition = artifactDefinitions.find(
-    (definition) => definition.kind === artifact.kind
-  );
+  const artifactDefinition =
+    artifactDefinitions.find(
+      (definition) => definition.kind === artifact.kind
+    ) ?? browserArtifact;
 
   if (!artifactDefinition) {
     throw new Error("Artifact definition not found!");
