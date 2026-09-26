@@ -95,7 +95,13 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const { chatId, targetUrl, projectId } = body;
+    const {
+      chatId,
+      targetUrl,
+      projectId,
+      browserScreenWidth,
+      browserScreenHeight,
+    } = body;
 
     if (!chatId || !targetUrl) {
       return Response.json(
@@ -105,6 +111,8 @@ export async function POST(request: Request) {
     }
 
     const browserSession = await getOrCreateBrowserSession({
+      browserScreenHeight,
+      browserScreenWidth,
       chatId,
       projectId,
       targetUrl,

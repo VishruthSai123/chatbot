@@ -52,10 +52,14 @@ export async function getOrCreateBrowserSession({
   chatId,
   targetUrl,
   projectId,
+  browserScreenWidth = 1280,
+  browserScreenHeight = 1140,
 }: {
   chatId: string;
   targetUrl: string;
   projectId?: string;
+  browserScreenWidth?: number;
+  browserScreenHeight?: number;
 }): Promise<ActiveBrowserSession> {
   const client = getBrowserUseClient();
 
@@ -121,8 +125,12 @@ export async function getOrCreateBrowserSession({
   }
 
   // 2. Spawn a new session on Browser Use Cloud
-  console.log(`[BrowserUse] Creating new browser session for ${targetUrl}...`);
+  console.log(
+    `[BrowserUse] Creating new browser session for ${targetUrl} (${browserScreenWidth}x${browserScreenHeight})...`
+  );
   const newCloudSession = await client.sessions.create({
+    browserScreenHeight,
+    browserScreenWidth,
     enableRecording: true,
     keepAlive: true,
     persistMemory: true,
