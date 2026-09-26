@@ -7,6 +7,7 @@ import {
   Maximize2,
   Minimize2,
   RotateCw,
+  Scaling,
   Square,
   X,
   ZoomIn,
@@ -72,6 +73,7 @@ export function BrowserPreview({
   const [iframeKey] = useState<number>(0);
   const [isStopping, setIsStopping] = useState(false);
   const [zoom, setZoom] = useState<number>(1);
+  const [viewMode, setViewMode] = useState<"fill" | "fit">("fill");
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerDimensions, setContainerDimensions] = useState<{
     width: number;
@@ -184,6 +186,30 @@ export function BrowserPreview({
   const handleZoomIn = useCallback(() => {
     setZoom((prev) => Math.min(1.6, Number((prev + 0.1).toFixed(2))));
   }, []);
+
+  const handleToggleViewMode = useCallback(() => {
+    setViewMode((prev) => (prev === "fill" ? "fit" : "fill"));
+  }, []);
+
+  // Compute effective scale:
+  // In "fill" mode, auto-expand so the stream reaches 100% of the container
+  // with zero letterboxing or pillarboxing borders, multiplied by user zoom.
+  const effectiveScale = useMemo(() => {
+    let scale = zoom;
+    if (viewMode === "fill" && containerDimensions) {
+      const containerRatio =
+        containerDimensions.width / Math.max(1, containerDimensions.height);
+      // Baseline stream ratio is ~1.234 (1024 / 830)
+      const streamRatio = 1.234;
+      const autoFillRatio =
+        containerRatio > streamRatio
+          ? containerRatio / streamRatio
+          : streamRatio / containerRatio;
+      const fillFactor = Math.min(1.6, Math.max(1.0, autoFillRatio));
+      scale = Number((scale * fillFactor).toFixed(3));
+    }
+    return scale;
+  }, [viewMode, containerDimensions, zoom]);
 
   const handleRetry = useCallback(() => {
     mutateSession();
@@ -339,6 +365,37 @@ export function BrowserPreview({
                   Zoom in (enlarge & clip margins)
                 </TooltipContent>
               </Tooltip>
+
+              <div className="mx-1 h-3.5 w-px bg-border/40" />
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    aria-label={
+                      viewMode === "fill"
+                        ? "Switch to Fit mode"
+                        : "Switch to Fill mode"
+                    }
+                    className={cn(
+                      "h-5 px-1.5 text-[10px] font-medium transition-colors",
+                      viewMode === "fill"
+                        ? "bg-accent text-accent-foreground font-semibold"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                    onClick={handleToggleViewMode}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    <Scaling className="mr-1 size-3" />
+                    {viewMode === "fill" ? "Fill" : "Fit"}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {viewMode === "fill"
+                    ? "Fill area (eliminates black borders, click for Fit)"
+                    : "Fit area (shows whole view, click for Fill)"}
+                </TooltipContent>
+              </Tooltip>
             </div>
           ) : null}
 
@@ -427,7 +484,8 @@ export function BrowserPreview({
             <div
               className="absolute inset-0 h-full w-full overflow-hidden transition-transform duration-150 ease-out origin-top"
               style={{
-                transform: zoom === 1 ? undefined : `scale(${zoom})`,
+                transform:
+                  effectiveScale === 1 ? undefined : `scale(${effectiveScale})`,
               }}
             >
               <iframe

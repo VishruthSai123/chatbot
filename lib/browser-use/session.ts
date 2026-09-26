@@ -52,7 +52,7 @@ export async function getOrCreateBrowserSession({
   chatId,
   targetUrl,
   projectId,
-  browserScreenWidth = 1000,
+  browserScreenWidth = 1024,
   browserScreenHeight,
 }: {
   chatId: string;
@@ -125,10 +125,11 @@ export async function getOrCreateBrowserSession({
   }
 
   // Adaptive screen sizing:
-  // Default to 1000px width so web content renders at ~1:1 readable scale in the right panel,
-  // with a 1.25 height multiplier (aspect ratio 0.8) to fill the vertical height completely.
-  const finalWidth = browserScreenWidth ?? 1000;
-  const finalHeight = browserScreenHeight ?? Math.round(finalWidth * 1.25);
+  // Default to 1024px width and 830px height (aspect ratio ~1.234)
+  // matching the workspace panel dimensions (60% split on desktop/laptop displays).
+  const finalWidth = browserScreenWidth ?? 1024;
+  const finalHeight =
+    browserScreenHeight ?? Math.round(finalWidth * (830 / 1024));
 
   // 2. Spawn a new session on Browser Use Cloud
   console.log(
