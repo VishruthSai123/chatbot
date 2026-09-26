@@ -83,8 +83,14 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { id, message, messages, selectedChatModel, selectedVisibilityType } =
-      requestBody;
+    const {
+      id,
+      message,
+      messages,
+      selectedChatModel,
+      selectedVisibilityType,
+      browserDimensions,
+    } = requestBody;
 
     const [botIdResult, session] = await Promise.all([
       checkBotId().catch(() => null),
@@ -341,6 +347,7 @@ export async function POST(request: Request) {
             }),
             runBrowserStep: runBrowserStep({ dataStream }),
             startTestSession: startTestSession({
+              browserDimensions,
               chatId: id,
               dataStream,
             }),

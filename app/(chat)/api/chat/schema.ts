@@ -27,6 +27,9 @@ const toolApprovalMessageSchema = z.object({
 });
 
 export const postRequestBodySchema = z.object({
+  browserDimensions: z
+    .object({ height: z.number(), width: z.number() })
+    .optional(),
   id: z.uuid(),
   message: userMessageSchema.optional(),
   messages: z.array(toolApprovalMessageSchema).optional(),

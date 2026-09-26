@@ -65,7 +65,7 @@ export function BrowserPreview({
   setMetadata,
   title,
 }: BrowserPreviewProps) {
-  const { chatId } = useActiveChat();
+  const { chatId, setBrowserDimensions } = useActiveChat();
   const { setArtifact } = useArtifact();
   const [iframeKey] = useState<number>(0);
   const [isStopping, setIsStopping] = useState(false);
@@ -83,16 +83,18 @@ export function BrowserPreview({
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
         if (width > 0 && height > 0) {
-          setContainerDimensions({
+          const dims = {
             height: Math.round(height),
             width: Math.round(width),
-          });
+          };
+          setContainerDimensions(dims);
+          setBrowserDimensions?.(dims);
         }
       }
     });
     ro.observe(containerRef.current);
     return () => ro.disconnect();
-  }, []);
+  }, [setBrowserDimensions]);
 
   // If liveUrl is not in metadata, fetch active session from DB for this chatId
   const shouldFetchSession = !metadata?.liveUrl && Boolean(chatId);
@@ -350,12 +352,11 @@ export function BrowserPreview({
         </div>
       </div>
 
-      {/* ─── BROWSER USE LIVE FRAME (Centered and Aspect-Ratio Locked) ─── */}
-      <div className="flex flex-1 min-h-0 min-w-0 w-full items-center justify-center p-2 sm:p-2.5 overflow-hidden">
+      {/* ─── BROWSER USE LIVE FRAME (Filling available space natively) ─── */}
+      <div className="flex flex-1 min-h-0 min-w-0 w-full flex-col overflow-hidden p-2 sm:p-2.5">
         <div
-          className="relative flex w-full flex-col overflow-hidden rounded-lg border border-border/40 bg-background shadow-xs"
+          className="relative flex flex-1 w-full flex-col overflow-hidden rounded-lg border border-border/40 bg-background shadow-xs"
           ref={containerRef}
-          style={{ aspectRatio: "1024 / 830", maxHeight: "100%" }}
         >
           {liveUrl ? (
             <iframe

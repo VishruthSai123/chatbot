@@ -29,6 +29,10 @@ import type { ChatMessage } from "@/lib/types";
 import { fetcher, fetchWithErrorHandlers, generateUUID } from "@/lib/utils";
 
 type ActiveChatContextValue = {
+  browserDimensions: { width: number; height: number } | null;
+  setBrowserDimensions: Dispatch<
+    SetStateAction<{ width: number; height: number } | null>
+  >;
   chatId: string;
   messages: ChatMessage[];
   setMessages: UseChatHelpers<ChatMessage>["setMessages"];
@@ -81,6 +85,14 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
 
   const [input, setInput] = useState("");
   const [showCreditCardAlert, setShowCreditCardAlert] = useState(false);
+  const [browserDimensions, setBrowserDimensions] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+  const browserDimensionsRef = useRef(browserDimensions);
+  useEffect(() => {
+    browserDimensionsRef.current = browserDimensions;
+  }, [browserDimensions]);
 
   const { data: chatData, isLoading } = useSWR(
     isNewChat
@@ -166,6 +178,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
             ...(isToolApprovalContinuation
               ? { messages: request.messages }
               : { message: lastMessage }),
+            browserDimensions: browserDimensionsRef.current ?? undefined,
             selectedChatModel: currentModelIdRef.current,
             selectedVisibilityType: visibility,
             ...request.body,
@@ -257,6 +270,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   const value = useMemo<ActiveChatContextValue>(
     () => ({
       addToolApprovalResponse,
+      browserDimensions,
       chatId,
       currentModelId,
       input,
@@ -265,6 +279,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       messages,
       regenerate,
       sendMessage,
+      setBrowserDimensions,
       setCurrentModelId,
       setInput,
       setMessages,
@@ -292,6 +307,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
       votes,
       currentModelId,
       showCreditCardAlert,
+      browserDimensions,
     ]
   );
 

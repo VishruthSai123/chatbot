@@ -8,11 +8,13 @@ type StartTestSessionProps = {
   session: Session;
   dataStream: UIMessageStreamWriter<ChatMessage>;
   chatId: string;
+  browserDimensions?: { width: number; height: number };
 };
 
 export const startTestSession = ({
   dataStream,
   chatId,
+  browserDimensions,
 }: Omit<StartTestSessionProps, "session">) =>
   tool({
     description:
@@ -26,6 +28,8 @@ export const startTestSession = ({
         });
 
         const browserSession = await getOrCreateBrowserSession({
+          browserScreenHeight: browserDimensions?.height,
+          browserScreenWidth: browserDimensions?.width,
           chatId,
           targetUrl,
         });
