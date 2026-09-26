@@ -1,7 +1,7 @@
 "use client";
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { useCallback } from "react";
-import { ActionTick } from "@/components/qa/action-tick";
+import { AgentProcessing } from "@/components/qa/agent-processing";
 import { FindingCard } from "@/components/qa/finding-card";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
@@ -156,6 +156,14 @@ const PurePreviewMessage = ({
     },
     { isStreaming: false, rendered: false, text: "" }
   ) ?? { isStreaming: false, rendered: false, text: "" };
+
+  let qaBlockRendered = false;
+  const qaToolTypes = new Set([
+    "tool-startTestSession",
+    "tool-runBrowserStep",
+    "tool-evaluateTestResult",
+  ]);
+  const qaParts = message.parts?.filter((p) => qaToolTypes.has(p.type)) ?? [];
 
   const parts = message.parts?.map((part, index) => {
     const { type } = part;
@@ -340,170 +348,63 @@ const PurePreviewMessage = ({
       );
     }
 
-    if (type === "tool-startTestSession") {
-      const { toolCallId, state } = part;
-      const targetUrl = (part as any).input?.targetUrl;
-      const isReused = (part.output as any)?.status === "reused";
-      const isSuccess =
-        part.output && !("error" in (part.output as Record<string, unknown>));
+    if (qaToolTypes.has(type)) {
+      if (!qaBlockRendered) {
+        qaBlockRendered = true;
 
-      const isRunning =
-        state === "input-available" || state === "input-streaming";
+        const evalPart = qaParts.find(
+          (p) =>
+            p.type === "tool-evaluateTestResult" &&
+            "output" in p &&
+            p.state === "output-available" &&
+            p.output &&
+            !("error" in (p.output as Record<string, unknown>))
+        ) as any;
 
-      return (
-        <div className="w-[min(100%,480px)]" key={toolCallId}>
-          {isRunning ? (
-            <ActionTick
-              isLatest={true}
-              tick={{
-                action: targetUrl
-                  ? `Connecting to ${targetUrl}`
-                  : "Initializing cloud browser session...",
-                status: "running",
-                url: targetUrl,
-              }}
+        return (
+          <div className="w-full space-y-3" key={`qa-group-${message.id}`}>
+            <AgentProcessing
+              isLoading={isLoading}
+              messageId={message.id}
+              parts={qaParts}
             />
-          ) : state === "output-available" && isSuccess ? (
-            <ActionTick
-              tick={{
-                action: isReused
-                  ? "Reconnected to active browser session"
-                  : "Live cloud browser connected",
-                status: "completed",
-                url: String(
-                  (part.output as Record<string, unknown>)?.targetUrl ??
-                    targetUrl ??
-                    ""
-                ),
-              }}
-            />
-          ) : (
-            <Tool className="w-full" defaultOpen={true}>
-              <ToolHeader state={state} type="tool-startTestSession" />
-              <ToolContent>
-                <ToolOutput
-                  errorText={
-                    part.output &&
-                    "error" in (part.output as Record<string, unknown>)
-                      ? String((part.output as Record<string, unknown>).error)
-                      : undefined
-                  }
-                  output={part.output}
+
+            {evalPart ? (
+              <div className="w-[min(100%,500px)] animate-in fade-in-0 duration-300">
+                <FindingCard
+                  finding={{
+                    actual: String(evalPart.output.actual ?? ""),
+                    evidence: Array.isArray(evalPart.output.evidence)
+                      ? (evalPart.output.evidence as any)
+                      : [],
+                    expected: String(evalPart.output.expected ?? ""),
+                    findingId: evalPart.output.findingId
+                      ? String(evalPart.output.findingId)
+                      : null,
+                    reproductionSteps: Array.isArray(
+                      evalPart.output.reproductionSteps
+                    )
+                      ? (evalPart.output.reproductionSteps as string[])
+                      : [],
+                    severity: evalPart.output.severity
+                      ? String(evalPart.output.severity)
+                      : "medium",
+                    status:
+                      (evalPart.output.status as
+                        | "pass"
+                        | "fail"
+                        | "uncertain"
+                        | "blocked") ?? "uncertain",
+                    summary: String(evalPart.output.summary ?? ""),
+                    title: String(evalPart.output.title ?? "Test Result"),
+                  }}
                 />
-              </ToolContent>
-            </Tool>
-          )}
-        </div>
-      );
-    }
-
-    if (type === "tool-runBrowserStep") {
-      const { toolCallId, state } = part;
-      const instruction = (part as any).input?.instruction;
-      const isSuccess =
-        part.output &&
-        !("error" in (part.output as Record<string, unknown>)) &&
-        Boolean((part.output as Record<string, unknown>)?.success);
-      const stepCount = (part.output as Record<string, unknown>)?.stepCount;
-      const isRunning =
-        state === "input-available" || state === "input-streaming";
-
-      return (
-        <div className="w-[min(100%,480px)]" key={toolCallId}>
-          {isRunning ? (
-            <ActionTick
-              isLatest={true}
-              tick={{
-                action: instruction
-                  ? `Executing: ${instruction}`
-                  : "Executing browser action...",
-                status: "running",
-              }}
-            />
-          ) : state === "output-available" && isSuccess ? (
-            <ActionTick
-              tick={{
-                action: instruction
-                  ? `Completed: ${instruction} (${stepCount ?? 1} steps)`
-                  : `Completed browser actions (${stepCount ?? 1} steps)`,
-                status: "completed",
-              }}
-            />
-          ) : (
-            <Tool className="w-full" defaultOpen={true}>
-              <ToolHeader state={state} type="tool-runBrowserStep" />
-              <ToolContent>
-                <ToolOutput
-                  errorText={
-                    part.output &&
-                    "error" in (part.output as Record<string, unknown>)
-                      ? String((part.output as Record<string, unknown>).error)
-                      : undefined
-                  }
-                  output={part.output}
-                />
-              </ToolContent>
-            </Tool>
-          )}
-        </div>
-      );
-    }
-
-    if (type === "tool-evaluateTestResult") {
-      const { toolCallId, state } = part;
-      return (
-        <div className="w-[min(100%,500px)]" key={toolCallId}>
-          {state === "output-available" &&
-          part.output &&
-          !("error" in part.output) ? (
-            <FindingCard
-              finding={{
-                actual: String(part.output.actual ?? ""),
-                evidence: Array.isArray(part.output.evidence)
-                  ? (part.output.evidence as any)
-                  : [],
-                expected: String(part.output.expected ?? ""),
-                findingId: part.output.findingId
-                  ? String(part.output.findingId)
-                  : null,
-                reproductionSteps: Array.isArray(part.output.reproductionSteps)
-                  ? (part.output.reproductionSteps as string[])
-                  : [],
-                severity: part.output.severity
-                  ? String(part.output.severity)
-                  : "medium",
-                status:
-                  (part.output.status as
-                    | "pass"
-                    | "fail"
-                    | "uncertain"
-                    | "blocked") ?? "uncertain",
-                summary: String(part.output.summary ?? ""),
-                title: String(part.output.title ?? "Test Result"),
-              }}
-            />
-          ) : (
-            <Tool className="w-full" defaultOpen={true}>
-              <ToolHeader state={state} type="tool-evaluateTestResult" />
-              <ToolContent>
-                {state === "input-available" && (
-                  <ToolInput input={part.input} />
-                )}
-                {state === "output-available" && (
-                  <ToolOutput
-                    errorText={
-                      part.output && "error" in part.output
-                        ? String(part.output.error)
-                        : undefined
-                    }
-                    output={part.output}
-                  />
-                )}
-              </ToolContent>
-            </Tool>
-          )}
-        </div>
-      );
+              </div>
+            ) : null}
+          </div>
+        );
+      }
+      return null;
     }
 
     return null;
