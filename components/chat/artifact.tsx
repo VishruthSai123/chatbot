@@ -470,10 +470,7 @@ function PureArtifact({
 
   return (
     <div
-      className={cn(
-        "flex h-dvh flex-col overflow-hidden border-l border-border/50 bg-sidebar transition-[width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
-        isBrowser ? "flex-1 min-w-0" : "w-[60%] shrink-0"
-      )}
+      className="flex h-dvh w-[60%] shrink-0 flex-col overflow-hidden border-l border-border/50 bg-sidebar transition-[width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
       data-testid="artifact"
     >
       {artifactPanel}

@@ -316,11 +316,11 @@ export function BrowserPreview({
 
       {/* ─── BROWSER USE LIVE FRAME (Filling available space) ─── */}
       <div className="flex flex-1 min-h-0 min-w-0 w-full flex-col overflow-hidden p-2 sm:p-2.5">
-        <div className="flex flex-1 min-h-0 min-w-0 w-full flex-col overflow-hidden rounded-lg border border-border/40 bg-background shadow-xs">
+        <div className="relative flex flex-1 min-h-0 min-w-0 w-full flex-col overflow-hidden rounded-lg border border-border/40 bg-background shadow-xs">
           {liveUrl ? (
             <iframe
               allow="clipboard-read; clipboard-write"
-              className="flex-1 min-h-0 w-full h-full border-0 bg-background block"
+              className="absolute inset-0 block h-full w-full border-0 bg-background"
               key={iframeKey}
               src={liveUrl}
               title="Live Browser Session"

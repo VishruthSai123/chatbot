@@ -123,8 +123,6 @@ export async function getOrCreateBrowserSession({
   // 2. Spawn a new session on Browser Use Cloud
   console.log(`[BrowserUse] Creating new browser session for ${targetUrl}...`);
   const newCloudSession = await client.sessions.create({
-    browserScreenHeight: 800,
-    browserScreenWidth: 1280,
     enableRecording: true,
     keepAlive: true,
     persistMemory: true,
