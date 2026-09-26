@@ -7,11 +7,8 @@ import {
   Maximize2,
   Minimize2,
   RotateCw,
-  Scaling,
   Square,
   X,
-  ZoomIn,
-  ZoomOut,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
@@ -72,8 +69,6 @@ export function BrowserPreview({
   const { setArtifact } = useArtifact();
   const [iframeKey] = useState<number>(0);
   const [isStopping, setIsStopping] = useState(false);
-  const [zoom, setZoom] = useState<number>(1);
-  const [viewMode, setViewMode] = useState<"fill" | "fit">("fill");
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerDimensions, setContainerDimensions] = useState<{
     width: number;
@@ -174,42 +169,6 @@ export function BrowserPreview({
       isVisible: false,
     }));
   }, [setArtifact]);
-
-  const handleZoomOut = useCallback(() => {
-    setZoom((prev) => Math.max(0.8, Number((prev - 0.1).toFixed(2))));
-  }, []);
-
-  const handleZoomReset = useCallback(() => {
-    setZoom(1);
-  }, []);
-
-  const handleZoomIn = useCallback(() => {
-    setZoom((prev) => Math.min(1.6, Number((prev + 0.1).toFixed(2))));
-  }, []);
-
-  const handleToggleViewMode = useCallback(() => {
-    setViewMode((prev) => (prev === "fill" ? "fit" : "fill"));
-  }, []);
-
-  // Compute effective scale:
-  // In "fill" mode, auto-expand so the stream reaches 100% of the container
-  // with zero letterboxing or pillarboxing borders, multiplied by user zoom.
-  const effectiveScale = useMemo(() => {
-    let scale = zoom;
-    if (viewMode === "fill" && containerDimensions) {
-      const containerRatio =
-        containerDimensions.width / Math.max(1, containerDimensions.height);
-      // Baseline stream ratio is ~1.234 (1024 / 830)
-      const streamRatio = 1.234;
-      const autoFillRatio =
-        containerRatio > streamRatio
-          ? containerRatio / streamRatio
-          : streamRatio / containerRatio;
-      const fillFactor = Math.min(1.6, Math.max(1.0, autoFillRatio));
-      scale = Number((scale * fillFactor).toFixed(3));
-    }
-    return scale;
-  }, [viewMode, containerDimensions, zoom]);
 
   const handleRetry = useCallback(() => {
     mutateSession();
@@ -316,89 +275,6 @@ export function BrowserPreview({
 
         {/* Right: Essential Workspace Controls */}
         <div className="flex items-center gap-1 shrink-0">
-          {/* Zoom controls to magnify content and clip letterbox margins */}
-          {liveUrl ? (
-            <div className="flex items-center rounded-md border border-border/40 bg-muted/40 px-1 py-0.5 mr-0.5">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label="Zoom out"
-                    className="size-5 p-0 text-muted-foreground hover:text-foreground"
-                    disabled={zoom <= 0.8}
-                    onClick={handleZoomOut}
-                    size="icon"
-                    variant="ghost"
-                  >
-                    <ZoomOut className="size-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Zoom out</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    className="px-1.5 text-[11px] font-mono font-medium text-muted-foreground hover:text-foreground select-none cursor-pointer"
-                    onClick={handleZoomReset}
-                    type="button"
-                  >
-                    {Math.round(zoom * 100)}%
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>Reset zoom (100%)</TooltipContent>
-              </Tooltip>
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label="Zoom in"
-                    className="size-5 p-0 text-muted-foreground hover:text-foreground"
-                    disabled={zoom >= 1.6}
-                    onClick={handleZoomIn}
-                    size="icon"
-                    variant="ghost"
-                  >
-                    <ZoomIn className="size-3" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  Zoom in (enlarge & clip margins)
-                </TooltipContent>
-              </Tooltip>
-
-              <div className="mx-1 h-3.5 w-px bg-border/40" />
-
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    aria-label={
-                      viewMode === "fill"
-                        ? "Switch to Fit mode"
-                        : "Switch to Fill mode"
-                    }
-                    className={cn(
-                      "h-5 px-1.5 text-[10px] font-medium transition-colors",
-                      viewMode === "fill"
-                        ? "bg-accent text-accent-foreground font-semibold"
-                        : "text-muted-foreground hover:text-foreground"
-                    )}
-                    onClick={handleToggleViewMode}
-                    size="sm"
-                    variant="ghost"
-                  >
-                    <Scaling className="mr-1 size-3" />
-                    {viewMode === "fill" ? "Fill" : "Fit"}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {viewMode === "fill"
-                    ? "Fill area (eliminates black borders, click for Fit)"
-                    : "Fit area (shows whole view, click for Fill)"}
-                </TooltipContent>
-              </Tooltip>
-            </div>
-          ) : null}
-
           {liveUrl ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -481,21 +357,13 @@ export function BrowserPreview({
           ref={containerRef}
         >
           {liveUrl ? (
-            <div
-              className="absolute inset-0 h-full w-full overflow-hidden transition-transform duration-150 ease-out origin-top"
-              style={{
-                transform:
-                  effectiveScale === 1 ? undefined : `scale(${effectiveScale})`,
-              }}
-            >
-              <iframe
-                allow="clipboard-read; clipboard-write"
-                className="h-full w-full border-0 bg-background"
-                key={iframeKey}
-                src={liveUrl}
-                title="Live Browser Session"
-              />
-            </div>
+            <iframe
+              allow="clipboard-read; clipboard-write"
+              className="absolute inset-0 block h-full w-full border-0 bg-background"
+              key={iframeKey}
+              src={liveUrl}
+              title="Live Browser Session"
+            />
           ) : status === "connecting" || isSessionFetching ? (
             <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center">
               <Shimmer
