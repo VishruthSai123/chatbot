@@ -38,6 +38,7 @@ import {
   getChatById,
   getMessageCountByUserId,
   getMessagesByChatId,
+  getTestSessionByChatId,
   saveChat,
   saveMessages,
   updateChatTitleById,
@@ -117,7 +118,10 @@ export async function POST(request: Request) {
 
     const isToolApprovalFlow = Boolean(messages);
 
-    const chat = await getChatById({ id });
+    const [chat, activeTestSession] = await Promise.all([
+      getChatById({ id }),
+      getTestSessionByChatId({ chatId: id }).catch(() => null),
+    ]);
     let messagesFromDb: DBMessage[] = [];
     let titlePromise: Promise<string> | null = null;
 
@@ -284,7 +288,11 @@ export async function POST(request: Request) {
                   "runBrowserStep",
                   "evaluateTestResult",
                 ],
-          instructions: systemPrompt({ requestHints, supportsTools }),
+          instructions: systemPrompt({
+            activeTestSession,
+            requestHints,
+            supportsTools,
+          }),
           messages: modelMessages,
           model: getLanguageModel(chatModel),
           onAbort() {

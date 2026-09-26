@@ -1,6 +1,6 @@
 import type { Geo } from "@vercel/functions";
 import type { ArtifactKind } from "@/components/chat/artifact";
-import { qaPrompt } from "./prompts-qa";
+import { getActiveSessionPrompt, qaPrompt } from "./prompts-qa";
 
 export const artifactsPrompt = `
 Artifacts is a side panel that displays content alongside the conversation. It supports scripts (code), documents (text), and spreadsheets. Changes appear in real-time.
@@ -67,17 +67,26 @@ About the origin of user's request:
 export const systemPrompt = ({
   requestHints,
   supportsTools,
+  activeTestSession,
 }: {
   requestHints: RequestHints;
   supportsTools: boolean;
+  activeTestSession?: {
+    browserSessionId: string | null;
+    targetUrl: string;
+    status: string;
+  } | null;
 }) => {
   const requestPrompt = getRequestPromptFromHints(requestHints);
+  const activeSessionText = getActiveSessionPrompt(activeTestSession);
 
   if (!supportsTools) {
     return `${regularPrompt}\n\n${requestPrompt}`;
   }
 
-  return `${regularPrompt}\n\n${requestPrompt}\n\n${artifactsPrompt}\n\n${qaPrompt}`;
+  return `${regularPrompt}\n\n${requestPrompt}\n\n${artifactsPrompt}\n\n${qaPrompt}${
+    activeSessionText ? `\n\n${activeSessionText}` : ""
+  }`;
 };
 
 export const codePrompt = `

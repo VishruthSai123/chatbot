@@ -5,10 +5,18 @@ import {
 } from "@/lib/db/queries";
 import { getBrowserUseClient, type TaskStepView } from "./client";
 
+function normalizeUrl(url: string): string {
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+  return trimmed;
+}
+
 function isSameTarget(urlA: string, urlB: string): boolean {
   try {
-    const a = new URL(urlA);
-    const b = new URL(urlB);
+    const a = new URL(normalizeUrl(urlA));
+    const b = new URL(normalizeUrl(urlB));
     return a.origin.toLowerCase() === b.origin.toLowerCase();
   } catch {
     return urlA.trim().toLowerCase() === urlB.trim().toLowerCase();
@@ -76,11 +84,24 @@ export async function getOrCreateBrowserSession({
             targetUrl: existing.targetUrl,
           };
         }
+
+        // Cloud session is no longer active (e.g. stopped, expired)
+        console.log(
+          `[BrowserUse] Existing session ${existing.browserSessionId} is ${liveSession?.status ?? "inactive"}. Marking completed in DB.`
+        );
+        await updateTestSessionStatus({
+          id: existing.id,
+          status: "completed",
+        });
       } catch (checkError) {
         console.warn(
-          `[BrowserUse] Failed to query existing session ${existing.browserSessionId}, creating fresh session:`,
+          `[BrowserUse] Failed to query existing session ${existing.browserSessionId}, marking completed in DB:`,
           checkError
         );
+        await updateTestSessionStatus({
+          id: existing.id,
+          status: "completed",
+        });
       }
     } else {
       // Target changed: terminate old cloud session cleanly to prevent resource leak

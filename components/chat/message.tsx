@@ -1,6 +1,7 @@
 "use client";
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { useCallback } from "react";
+import { ActionTick } from "@/components/qa/action-tick";
 import { FindingCard } from "@/components/qa/finding-card";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
@@ -341,95 +342,109 @@ const PurePreviewMessage = ({
 
     if (type === "tool-startTestSession") {
       const { toolCallId, state } = part;
+      const targetUrl = (part as any).input?.targetUrl;
+      const isReused = (part.output as any)?.status === "reused";
+      const isSuccess =
+        part.output && !("error" in (part.output as Record<string, unknown>));
+
+      const isRunning =
+        state === "input-available" || state === "input-streaming";
+
       return (
-        <div className="w-[min(100%,450px)]" key={toolCallId}>
-          <Tool className="w-full" defaultOpen={true}>
-            <ToolHeader state={state} type="tool-startTestSession" />
-            <ToolContent>
-              {state === "input-available" && <ToolInput input={part.input} />}
-              {state === "output-available" && (
+        <div className="w-[min(100%,480px)]" key={toolCallId}>
+          {isRunning ? (
+            <ActionTick
+              isLatest={true}
+              tick={{
+                action: targetUrl
+                  ? `Connecting to ${targetUrl}`
+                  : "Initializing cloud browser session...",
+                status: "running",
+                url: targetUrl,
+              }}
+            />
+          ) : state === "output-available" && isSuccess ? (
+            <ActionTick
+              tick={{
+                action: isReused
+                  ? "Reconnected to active browser session"
+                  : "Live cloud browser connected",
+                status: "completed",
+                url: String(
+                  (part.output as Record<string, unknown>)?.targetUrl ??
+                    targetUrl ??
+                    ""
+                ),
+              }}
+            />
+          ) : (
+            <Tool className="w-full" defaultOpen={true}>
+              <ToolHeader state={state} type="tool-startTestSession" />
+              <ToolContent>
                 <ToolOutput
                   errorText={
-                    part.output && "error" in part.output
-                      ? String(part.output.error)
+                    part.output &&
+                    "error" in (part.output as Record<string, unknown>)
+                      ? String((part.output as Record<string, unknown>).error)
                       : undefined
                   }
-                  output={
-                    part.output && "error" in part.output ? null : (
-                      <div className="flex items-center gap-2 px-1 py-1.5 text-xs">
-                        <span className="size-2 rounded-full bg-emerald-500" />
-                        <span className="text-emerald-600 dark:text-emerald-400 font-medium">
-                          Browser session{" "}
-                          {part.output?.status === "reused"
-                            ? "reused"
-                            : "created"}
-                        </span>
-                        {part.output?.targetUrl ? (
-                          <span className="truncate text-muted-foreground">
-                            — {String(part.output.targetUrl)}
-                          </span>
-                        ) : null}
-                      </div>
-                    )
-                  }
+                  output={part.output}
                 />
-              )}
-            </ToolContent>
-          </Tool>
+              </ToolContent>
+            </Tool>
+          )}
         </div>
       );
     }
 
     if (type === "tool-runBrowserStep") {
       const { toolCallId, state } = part;
+      const instruction = (part as any).input?.instruction;
+      const isSuccess =
+        part.output &&
+        !("error" in (part.output as Record<string, unknown>)) &&
+        Boolean((part.output as Record<string, unknown>)?.success);
+      const stepCount = (part.output as Record<string, unknown>)?.stepCount;
+      const isRunning =
+        state === "input-available" || state === "input-streaming";
+
       return (
-        <div className="w-[min(100%,450px)]" key={toolCallId}>
-          <Tool className="w-full" defaultOpen={true}>
-            <ToolHeader state={state} type="tool-runBrowserStep" />
-            <ToolContent>
-              {state === "input-available" && <ToolInput input={part.input} />}
-              {state === "output-available" && (
+        <div className="w-[min(100%,480px)]" key={toolCallId}>
+          {isRunning ? (
+            <ActionTick
+              isLatest={true}
+              tick={{
+                action: instruction
+                  ? `Executing: ${instruction}`
+                  : "Executing browser action...",
+                status: "running",
+              }}
+            />
+          ) : state === "output-available" && isSuccess ? (
+            <ActionTick
+              tick={{
+                action: instruction
+                  ? `Completed: ${instruction} (${stepCount ?? 1} steps)`
+                  : `Completed browser actions (${stepCount ?? 1} steps)`,
+                status: "completed",
+              }}
+            />
+          ) : (
+            <Tool className="w-full" defaultOpen={true}>
+              <ToolHeader state={state} type="tool-runBrowserStep" />
+              <ToolContent>
                 <ToolOutput
                   errorText={
-                    part.output && "error" in part.output
-                      ? String(part.output.error)
+                    part.output &&
+                    "error" in (part.output as Record<string, unknown>)
+                      ? String((part.output as Record<string, unknown>).error)
                       : undefined
                   }
-                  output={
-                    part.output && !("error" in part.output) ? (
-                      <div className="flex items-center gap-2 px-1 py-1.5 text-xs">
-                        <span
-                          className={cn(
-                            "size-2 rounded-full",
-                            part.output?.success
-                              ? "bg-emerald-500"
-                              : "bg-red-500"
-                          )}
-                        />
-                        <span
-                          className={cn(
-                            "font-medium",
-                            part.output?.success
-                              ? "text-emerald-600 dark:text-emerald-400"
-                              : "text-red-600 dark:text-red-400"
-                          )}
-                        >
-                          {part.output?.success
-                            ? "Completed"
-                            : "Task encountered issues"}
-                        </span>
-                        {part.output?.stepCount ? (
-                          <span className="text-muted-foreground">
-                            — {part.output.stepCount} steps
-                          </span>
-                        ) : null}
-                      </div>
-                    ) : null
-                  }
+                  output={part.output}
                 />
-              )}
-            </ToolContent>
-          </Tool>
+              </ToolContent>
+            </Tool>
+          )}
         </div>
       );
     }

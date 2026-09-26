@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import useSWR from "swr";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,7 +19,7 @@ import {
   useArtifactSelector,
 } from "@/hooks/use-artifact";
 import type { Attachment, ChatMessage } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { cn, fetcher } from "@/lib/utils";
 import { Artifact } from "./artifact";
 import { ChatHeader } from "./chat-header";
 import { DataStreamHandler } from "./data-stream-handler";
@@ -53,9 +54,54 @@ export function ChatShell() {
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
-  const { artifact, metadata, setArtifact } = useArtifact();
+  const { artifact, metadata, setArtifact, setMetadata } = useArtifact();
   const isBrowser = artifact.kind === "browser";
   const isFullscreen = Boolean(metadata?.isFullscreen);
+
+  // Restore active browser session on page load/refresh
+  const { data: sessionData } = useSWR<{
+    session: {
+      id: string;
+      browserSessionId: string;
+      liveUrl: string | null;
+      targetUrl: string;
+      status: string;
+    } | null;
+  }>(chatId ? `/api/qa/session?chatId=${chatId}` : null, fetcher, {
+    revalidateOnFocus: false,
+  });
+
+  const hasRestoredSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const s = sessionData?.session;
+    if (
+      s?.liveUrl &&
+      s.status === "active" &&
+      hasRestoredSessionRef.current !== s.id
+    ) {
+      hasRestoredSessionRef.current = s.id;
+      setArtifact((prev) => {
+        if (prev.isVisible) {
+          return prev;
+        }
+        return {
+          ...prev,
+          documentId: s.id,
+          isVisible: true,
+          kind: "browser",
+          status: "idle",
+          title: s.targetUrl || "Live Browser",
+        };
+      });
+      setMetadata((prev: Record<string, unknown> | null) => ({
+        ...prev,
+        browserSessionId: s.browserSessionId,
+        liveUrl: s.liveUrl ?? undefined,
+        status: "live",
+        targetUrl: s.targetUrl,
+      }));
+    }
+  }, [sessionData, setArtifact, setMetadata]);
 
   const stopRef = useRef(stop);
   stopRef.current = stop;
@@ -64,6 +110,7 @@ export function ChatShell() {
   useEffect(() => {
     if (prevChatIdRef.current !== chatId) {
       prevChatIdRef.current = chatId;
+      hasRestoredSessionRef.current = null;
       stopRef.current();
       setArtifact(initialArtifactData);
       setEditingMessage(null);

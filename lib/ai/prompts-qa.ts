@@ -44,3 +44,32 @@ When calling \`runBrowserStep\`, provide clear, specific, actionable instruction
 
 Not every message requires browser testing. For questions, explanations, general conversation, or non-browser tasks, respond normally without invoking QA tools. Only use QA tools when the user explicitly asks to test, verify, explore, or interact with a web application.
 `;
+
+export function getActiveSessionPrompt(
+  session?: {
+    browserSessionId: string | null;
+    targetUrl: string;
+    status: string;
+  } | null
+): string {
+  if (
+    !session?.browserSessionId ||
+    session.status === "completed" ||
+    session.status === "error"
+  ) {
+    return "";
+  }
+
+  return `
+## Current Active Browser Testing Session
+An active cloud browser session is already open and ready for this chat:
+- Browser Session ID: \`${session.browserSessionId}\`
+- Target Application URL: \`${session.targetUrl}\`
+- Session Status: \`${session.status}\`
+
+IMPORTANT INSTRUCTIONS FOR MULTI-TURN CONTINUITY:
+1. For any follow-up test actions, exploratory tasks, or verification on "${session.targetUrl}", DO NOT call \`startTestSession\` again.
+2. Directly call \`runBrowserStep\` using \`browserSessionId: "${session.browserSessionId}"\`. This preserves the browser's current page DOM, cookies, session storage, and logged-in state.
+3. Only call \`startTestSession\` if the user explicitly specifies a different website URL or demands a fresh browser reset.
+`;
+}

@@ -1,9 +1,13 @@
 import { auth } from "@/app/(auth)/auth";
+import { getBrowserUseClient } from "@/lib/browser-use/client";
 import {
   getOrCreateBrowserSession,
   stopBrowserSession,
 } from "@/lib/browser-use/session";
-import { getTestSessionByChatId } from "@/lib/db/queries";
+import {
+  getTestSessionByChatId,
+  updateTestSessionStatus,
+} from "@/lib/db/queries";
 
 export async function GET(request: Request) {
   const session = await auth();
@@ -29,13 +33,47 @@ export async function GET(request: Request) {
       return Response.json({ session: null });
     }
 
+    const { status: initialStatus, liveUrl: initialLiveUrl } = testSession;
+    let currentStatus = initialStatus;
+    let liveUrl = initialLiveUrl;
+
+    if (testSession.browserSessionId && testSession.status === "active") {
+      try {
+        const client = getBrowserUseClient();
+        const cloudSession = await client.sessions.get(
+          testSession.browserSessionId
+        );
+        if (cloudSession && cloudSession.status !== "active") {
+          currentStatus = "completed";
+          await updateTestSessionStatus({
+            id: testSession.id,
+            status: "completed",
+          });
+        } else if (cloudSession?.liveUrl && cloudSession.liveUrl !== liveUrl) {
+          const { liveUrl: cloudLiveUrl } = cloudSession;
+          liveUrl = cloudLiveUrl;
+          await updateTestSessionStatus({
+            id: testSession.id,
+            liveUrl,
+            status: "active",
+          });
+        }
+      } catch {
+        currentStatus = "completed";
+        await updateTestSessionStatus({
+          id: testSession.id,
+          status: "completed",
+        }).catch(() => null);
+      }
+    }
+
     return Response.json({
       session: {
         browserSessionId: testSession.browserSessionId,
         chatId: testSession.chatId,
         id: testSession.id,
-        liveUrl: testSession.liveUrl,
-        status: testSession.status,
+        liveUrl,
+        status: currentStatus,
         targetUrl: testSession.targetUrl,
       },
     });
