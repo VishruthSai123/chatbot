@@ -369,8 +369,10 @@ function PureArtifact({
       )}
       <div
         className={cn(
-          "relative flex-1 overflow-y-auto bg-background",
-          isBrowser && "min-h-0 h-full overflow-hidden bg-sidebar"
+          "relative flex-1 bg-background",
+          isBrowser
+            ? "flex flex-col h-full min-h-0 min-w-0 overflow-hidden bg-sidebar"
+            : "overflow-y-auto"
         )}
         data-slot="artifact-content"
         onScroll={handleArtifactScroll}
@@ -468,7 +470,10 @@ function PureArtifact({
 
   return (
     <div
-      className="flex h-dvh w-[60%] shrink-0 flex-col overflow-hidden border-l border-border/50 bg-sidebar transition-[width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
+      className={cn(
+        "flex h-dvh flex-col overflow-hidden border-l border-border/50 bg-sidebar transition-[width] duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
+        isBrowser ? "flex-1 min-w-0" : "w-[60%] shrink-0"
+      )}
       data-testid="artifact"
     >
       {artifactPanel}

@@ -176,7 +176,7 @@ export function BrowserPreview({
   return (
     <div
       className={cn(
-        "flex h-full w-full min-h-0 flex-1 flex-col bg-sidebar select-none transition-all duration-200",
+        "flex h-full w-full min-h-0 min-w-0 flex-1 flex-col bg-sidebar select-none transition-all duration-200",
         isFullscreen && "fixed inset-0 z-50 bg-background"
       )}
     >
@@ -315,18 +315,18 @@ export function BrowserPreview({
       </div>
 
       {/* ─── BROWSER USE LIVE FRAME (Filling available space) ─── */}
-      <div className="flex-1 min-h-0 w-full p-2 sm:p-2.5">
-        <div className="h-full w-full min-h-0 rounded-lg border border-border/40 bg-background overflow-hidden shadow-xs flex flex-col">
+      <div className="flex flex-1 min-h-0 min-w-0 w-full flex-col overflow-hidden p-2 sm:p-2.5">
+        <div className="flex flex-1 min-h-0 min-w-0 w-full flex-col overflow-hidden rounded-lg border border-border/40 bg-background shadow-xs">
           {liveUrl ? (
             <iframe
               allow="clipboard-read; clipboard-write"
-              className="h-full w-full border-0 bg-background"
+              className="flex-1 min-h-0 w-full h-full border-0 bg-background block"
               key={iframeKey}
               src={liveUrl}
               title="Live Browser Session"
             />
           ) : status === "connecting" || isSessionFetching ? (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center">
+            <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center">
               <Shimmer
                 className="text-sm font-medium text-foreground whitespace-normal break-words"
                 duration={1.5}
@@ -338,7 +338,7 @@ export function BrowserPreview({
               </p>
             </div>
           ) : status === "error" ? (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center">
+            <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center">
               <div className="flex size-10 items-center justify-center rounded-xl border border-destructive/20 bg-destructive/10 text-destructive shadow-xs">
                 <AlertCircle className="size-5" />
               </div>
@@ -362,7 +362,7 @@ export function BrowserPreview({
               </Button>
             </div>
           ) : (
-            <div className="flex h-full w-full flex-col items-center justify-center gap-3 p-6 text-center">
+            <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center">
               <div className="flex size-10 items-center justify-center rounded-xl border border-border/50 bg-muted/40 text-muted-foreground shadow-xs">
                 <Globe className="size-5 opacity-70" />
               </div>
