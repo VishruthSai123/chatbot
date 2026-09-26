@@ -52,8 +52,8 @@ export async function getOrCreateBrowserSession({
   chatId,
   targetUrl,
   projectId,
-  browserScreenWidth = 1280,
-  browserScreenHeight = 1140,
+  browserScreenWidth = 1000,
+  browserScreenHeight,
 }: {
   chatId: string;
   targetUrl: string;
@@ -124,13 +124,19 @@ export async function getOrCreateBrowserSession({
     }
   }
 
+  // Adaptive screen sizing:
+  // Default to 1000px width so web content renders at ~1:1 readable scale in the right panel,
+  // with a 1.25 height multiplier (aspect ratio 0.8) to fill the vertical height completely.
+  const finalWidth = browserScreenWidth ?? 1000;
+  const finalHeight = browserScreenHeight ?? Math.round(finalWidth * 1.25);
+
   // 2. Spawn a new session on Browser Use Cloud
   console.log(
-    `[BrowserUse] Creating new browser session for ${targetUrl} (${browserScreenWidth}x${browserScreenHeight})...`
+    `[BrowserUse] Creating new browser session for ${targetUrl} (${finalWidth}x${finalHeight})...`
   );
   const newCloudSession = await client.sessions.create({
-    browserScreenHeight,
-    browserScreenWidth,
+    browserScreenHeight: finalHeight,
+    browserScreenWidth: finalWidth,
     enableRecording: true,
     keepAlive: true,
     persistMemory: true,

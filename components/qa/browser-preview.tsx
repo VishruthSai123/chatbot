@@ -9,8 +9,10 @@ import {
   RotateCw,
   Square,
   X,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import {
@@ -69,9 +71,46 @@ export function BrowserPreview({
   const { setArtifact } = useArtifact();
   const [iframeKey] = useState<number>(0);
   const [isStopping, setIsStopping] = useState(false);
+  const [zoom, setZoom] = useState<number>(1);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerDimensions, setContainerDimensions] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!containerRef.current) {
+      return;
+    }
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setContainerDimensions({
+            height: Math.round(height),
+            width: Math.round(width),
+          });
+        }
+      }
+    });
+    ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, []);
 
   // If liveUrl is not in metadata, fetch active session from DB for this chatId
   const shouldFetchSession = !metadata?.liveUrl && Boolean(chatId);
+  const sessionQuery = useMemo(() => {
+    if (!shouldFetchSession) {
+      return null;
+    }
+    const params = new URLSearchParams({ chatId: chatId ?? "" });
+    if (containerDimensions) {
+      params.set("width", String(containerDimensions.width));
+      params.set("height", String(containerDimensions.height));
+    }
+    return `/api/qa/session?${params.toString()}`;
+  }, [shouldFetchSession, chatId, containerDimensions]);
+
   const {
     data: sessionData,
     error: sessionFetchError,
@@ -85,7 +124,7 @@ export function BrowserPreview({
       targetUrl: string;
       status: string;
     } | null;
-  }>(shouldFetchSession ? `/api/qa/session?chatId=${chatId}` : null, fetcher, {
+  }>(sessionQuery, fetcher, {
     revalidateOnFocus: false,
   });
 
@@ -133,6 +172,18 @@ export function BrowserPreview({
       isVisible: false,
     }));
   }, [setArtifact]);
+
+  const handleZoomOut = useCallback(() => {
+    setZoom((prev) => Math.max(0.8, Number((prev - 0.1).toFixed(2))));
+  }, []);
+
+  const handleZoomReset = useCallback(() => {
+    setZoom(1);
+  }, []);
+
+  const handleZoomIn = useCallback(() => {
+    setZoom((prev) => Math.min(1.6, Number((prev + 0.1).toFixed(2))));
+  }, []);
 
   const handleRetry = useCallback(() => {
     mutateSession();
@@ -239,6 +290,58 @@ export function BrowserPreview({
 
         {/* Right: Essential Workspace Controls */}
         <div className="flex items-center gap-1 shrink-0">
+          {/* Zoom controls to magnify content and clip letterbox margins */}
+          {liveUrl ? (
+            <div className="flex items-center rounded-md border border-border/40 bg-muted/40 px-1 py-0.5 mr-0.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    aria-label="Zoom out"
+                    className="size-5 p-0 text-muted-foreground hover:text-foreground"
+                    disabled={zoom <= 0.8}
+                    onClick={handleZoomOut}
+                    size="icon"
+                    variant="ghost"
+                  >
+                    <ZoomOut className="size-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Zoom out</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    className="px-1.5 text-[11px] font-mono font-medium text-muted-foreground hover:text-foreground select-none cursor-pointer"
+                    onClick={handleZoomReset}
+                    type="button"
+                  >
+                    {Math.round(zoom * 100)}%
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Reset zoom (100%)</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    aria-label="Zoom in"
+                    className="size-5 p-0 text-muted-foreground hover:text-foreground"
+                    disabled={zoom >= 1.6}
+                    onClick={handleZoomIn}
+                    size="icon"
+                    variant="ghost"
+                  >
+                    <ZoomIn className="size-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Zoom in (enlarge & clip margins)
+                </TooltipContent>
+              </Tooltip>
+            </div>
+          ) : null}
+
           {liveUrl ? (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -316,15 +419,25 @@ export function BrowserPreview({
 
       {/* ─── BROWSER USE LIVE FRAME (Filling available space) ─── */}
       <div className="flex flex-1 min-h-0 min-w-0 w-full flex-col overflow-hidden p-2 sm:p-2.5">
-        <div className="relative flex flex-1 min-h-0 min-w-0 w-full flex-col overflow-hidden rounded-lg border border-border/40 bg-background shadow-xs">
+        <div
+          className="relative flex flex-1 min-h-0 min-w-0 w-full flex-col overflow-hidden rounded-lg border border-border/40 bg-background shadow-xs"
+          ref={containerRef}
+        >
           {liveUrl ? (
-            <iframe
-              allow="clipboard-read; clipboard-write"
-              className="absolute inset-0 block h-full w-full border-0 bg-background"
-              key={iframeKey}
-              src={liveUrl}
-              title="Live Browser Session"
-            />
+            <div
+              className="absolute inset-0 h-full w-full overflow-hidden transition-transform duration-150 ease-out origin-top"
+              style={{
+                transform: zoom === 1 ? undefined : `scale(${zoom})`,
+              }}
+            >
+              <iframe
+                allow="clipboard-read; clipboard-write"
+                className="h-full w-full border-0 bg-background"
+                key={iframeKey}
+                src={liveUrl}
+                title="Live Browser Session"
+              />
+            </div>
           ) : status === "connecting" || isSessionFetching ? (
             <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center">
               <Shimmer
