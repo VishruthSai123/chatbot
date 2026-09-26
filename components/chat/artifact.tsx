@@ -21,7 +21,7 @@ import { textArtifact } from "@/artifacts/text/client";
 import { useArtifact } from "@/hooks/use-artifact";
 import type { Document, Vote } from "@/lib/db/schema";
 import type { Attachment, ChatMessage } from "@/lib/types";
-import { fetcher } from "@/lib/utils";
+import { cn, fetcher } from "@/lib/utils";
 import { useSidebar } from "../ui/sidebar";
 import { ArtifactActions } from "./artifact-actions";
 import { ArtifactCloseButton } from "./artifact-close-button";
@@ -90,6 +90,7 @@ function PureArtifact({
   selectedModelId: string;
 }) {
   const { artifact, setArtifact, metadata, setMetadata } = useArtifact();
+  const isBrowser = artifact.kind === "browser";
 
   const {
     data: documents,
@@ -328,7 +329,7 @@ function PureArtifact({
 
   const artifactPanel = (
     <>
-      {sidebarState !== "collapsed" && (
+      {sidebarState !== "collapsed" && !isBrowser && (
         <div className="flex h-[calc(3.5rem+1px)] shrink-0 items-center justify-between border-b border-border/50 px-4">
           <div className="flex items-center gap-3">
             <ArtifactCloseButton />
@@ -367,7 +368,10 @@ function PureArtifact({
         </div>
       )}
       <div
-        className="relative flex-1 overflow-y-auto bg-background"
+        className={cn(
+          "relative flex-1 overflow-y-auto bg-background",
+          isBrowser && "min-h-0 h-full overflow-hidden bg-sidebar"
+        )}
         data-slot="artifact-content"
         onScroll={handleArtifactScroll}
         ref={artifactContentRef}
@@ -392,7 +396,7 @@ function PureArtifact({
           title={artifact.title}
         />
         <AnimatePresence>
-          {isCurrentVersion ? (
+          {isCurrentVersion && !isBrowser ? (
             <Toolbar
               artifactActions={
                 <ArtifactActions
@@ -420,7 +424,7 @@ function PureArtifact({
         </AnimatePresence>
       </div>
       <AnimatePresence>
-        {!isCurrentVersion && (
+        {!isCurrentVersion && !isBrowser && (
           <VersionFooter
             currentVersionIndex={currentVersionIndex}
             documents={documents}
