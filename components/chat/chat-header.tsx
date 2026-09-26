@@ -36,12 +36,6 @@ function PureChatHeader({
     revalidateOnFocus: false,
   });
 
-  const hasBrowserSession = Boolean(
-    sessionData?.session?.liveUrl ||
-      metadata?.liveUrl ||
-      (artifact.kind === "browser" && artifact.isVisible)
-  );
-
   const isBrowserOpen = Boolean(
     artifact.isVisible && artifact.kind === "browser"
   );
@@ -92,38 +86,36 @@ function PureChatHeader({
       )}
 
       {/* Browser Toggle Button (Top-Right) */}
-      {hasBrowserSession ? (
-        <Button
-          className={cn(
-            "h-8 gap-2 px-2.5 text-xs font-medium md:ml-auto transition-all",
-            isBrowserOpen
-              ? "bg-muted text-foreground border-border shadow-xs"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-          onClick={handleToggleBrowser}
-          size="sm"
-          variant="outline"
-        >
-          <Globe className="size-3.5" />
-          <span>Browser</span>
-          {isWorking ? (
-            <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-500">
-              <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
-              Working
-            </span>
-          ) : isLive ? (
-            <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-500">
-              <span className="size-1.5 rounded-full bg-emerald-500" />
-              Live
-            </span>
-          ) : (
-            <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <span className="size-1.5 rounded-full bg-muted-foreground/40" />
-              Ready
-            </span>
-          )}
-        </Button>
-      ) : null}
+      <Button
+        className={cn(
+          "h-8 gap-2 px-2.5 text-xs font-medium md:ml-auto transition-all",
+          isBrowserOpen
+            ? "bg-muted text-foreground border-border shadow-xs"
+            : "text-muted-foreground hover:text-foreground"
+        )}
+        onClick={handleToggleBrowser}
+        size="sm"
+        variant="outline"
+      >
+        <Globe className="size-3.5" />
+        <span>Browser</span>
+        {isWorking ? (
+          <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-500">
+            <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
+            Working
+          </span>
+        ) : isLive ? (
+          <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-500">
+            <span className="size-1.5 rounded-full bg-emerald-500" />
+            Live
+          </span>
+        ) : (
+          <span className="flex items-center gap-1 text-[10px] text-muted-foreground/60">
+            <span className="size-1.5 rounded-full bg-muted-foreground/30" />
+            Ready
+          </span>
+        )}
+      </Button>
     </header>
   );
 }
