@@ -263,7 +263,7 @@ export function BrowserPreview({
     if (browserDimensions?.width && browserDimensions?.height) {
       return browserDimensions.width / browserDimensions.height;
     }
-    return 1442 / 1002;
+    return 1320 / 1280;
   }, [
     metadata?.browserScreenWidth,
     metadata?.browserScreenHeight,
