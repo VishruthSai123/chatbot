@@ -78,30 +78,41 @@ export const AgentProcessing = memo(
     const execState = metadata?.executionState;
     const isCanonicalTerminal = isTerminalExecutionState(execState);
 
+    const isPartStopped = parts.some(
+      (p) =>
+        Boolean(p.output?.isStopped) ||
+        p.output?.output === "Test execution was stopped by user."
+    );
+
+    const isCancelled =
+      execState === "CANCELLED" ||
+      metadata?.status === "cancelled" ||
+      metadata?.status === "stopped" ||
+      isPartStopped;
+
     const isError =
       Boolean(errorPart) ||
       execState === "FAILED" ||
       execState === "TIMED_OUT" ||
       Boolean(metadata?.errorMessage);
 
-    const isCancelled = execState === "CANCELLED";
+    // Historical messages must NEVER be inferred as active execution.
+    // An execution is ONLY active if the stream is live (isLoading) or tracker explicitly says so.
+    const isTrackerActive =
+      execState === "STARTING" ||
+      execState === "RUNNING" ||
+      execState === "WAITING" ||
+      execState === "FINALIZING" ||
+      execState === "CANCELLING";
 
-    // Overall running state:
-    // If the canonical state is terminal (COMPLETED, FAILED, TIMED_OUT, CANCELLED),
-    // it is definitively NOT running, regardless of trailing HTTP stream chunks.
+    const isToolStreamActive =
+      isLoading && (isStartRunning || isRunStepRunning || isEvalRunning);
+
     const isAnyRunning =
       !isError &&
       !isCancelled &&
       !isCanonicalTerminal &&
-      (isLoading ||
-        isStartRunning ||
-        isRunStepRunning ||
-        isEvalRunning ||
-        execState === "STARTING" ||
-        execState === "RUNNING" ||
-        execState === "WAITING" ||
-        execState === "FINALIZING" ||
-        execState === "CANCELLING");
+      (isTrackerActive || isToolStreamActive);
 
     // Track active execution duration
     useEffect(() => {
@@ -191,7 +202,7 @@ export const AgentProcessing = memo(
               ? "completed"
               : isPartError
                 ? "failed"
-                : isCancelled || execState === "CANCELLING"
+                : isCancelled || execState === "CANCELLING" || !isAnyRunning
                   ? "completed"
                   : "running",
         });
@@ -234,6 +245,7 @@ export const AgentProcessing = memo(
       metadata?.targetUrl,
       execState,
       isCancelled,
+      isAnyRunning,
     ]);
 
     // Descriptive live summary text projected from canonical state
@@ -262,7 +274,7 @@ export const AgentProcessing = memo(
       }
 
       // 1. Initial Starting phase
-      if (isStartRunning || execState === "STARTING") {
+      if (isAnyRunning && (isStartRunning || execState === "STARTING")) {
         const target =
           startTestSessionPart?.input?.targetUrl || metadata?.targetUrl;
         return target
@@ -271,7 +283,7 @@ export const AgentProcessing = memo(
       }
 
       // 2. Active Browser Step Execution phase
-      if (isRunStepRunning || execState === "RUNNING") {
+      if (isAnyRunning && (isRunStepRunning || execState === "RUNNING")) {
         if (metadata?.currentAction) {
           return `${metadata.currentAction}...`;
         }
@@ -291,7 +303,7 @@ export const AgentProcessing = memo(
       }
 
       // 3. Waiting / Analyzing Phase (Browser action completed, awaiting assertions)
-      if (execState === "WAITING") {
+      if (isAnyRunning && execState === "WAITING") {
         return (
           metadata?.currentAction ||
           "Analyzing browser outcome and verifying state..."
@@ -299,7 +311,7 @@ export const AgentProcessing = memo(
       }
 
       // 4. Finalizing / Verification Phase
-      if (isEvalRunning || execState === "FINALIZING") {
+      if (isAnyRunning && (isEvalRunning || execState === "FINALIZING")) {
         return "Verifying assertions and recording findings...";
       }
 
@@ -308,7 +320,7 @@ export const AgentProcessing = memo(
         return `Verification complete: ${evaluateTestResultPart.output.title}`;
       }
 
-      if (execState === "COMPLETED") {
+      if (execState === "COMPLETED" || metadata?.status === "completed") {
         return "Test execution completed.";
       }
 
@@ -319,6 +331,7 @@ export const AgentProcessing = memo(
 
       return "Test completed.";
     }, [
+      isAnyRunning,
       isCancelled,
       execState,
       isError,
@@ -330,6 +343,7 @@ export const AgentProcessing = memo(
       metadata?.errorMessage,
       metadata?.targetUrl,
       metadata?.currentAction,
+      metadata?.status,
       startTestSessionPart,
       runBrowserStepParts,
       evaluateTestResultPart,

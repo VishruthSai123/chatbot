@@ -652,11 +652,12 @@ async function cancelRun({
                       type: "tool-runBrowserStep",
                     },
                   ]
-                : []),
-              {
-                text: "Test was stopped by user.",
-                type: "text",
-              },
+                : [
+                    {
+                      text: "Test was stopped by user.",
+                      type: "text",
+                    },
+                  ]),
             ],
             role: "assistant",
           },

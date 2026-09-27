@@ -91,24 +91,27 @@ export function ChatShell() {
           title: s.targetUrl || "Live Browser",
         };
       });
-      setMetadata((prev: Record<string, unknown> | null) => ({
-        ...prev,
-        browserSessionId: s.browserSessionId,
-        liveUrl: s.liveUrl ?? undefined,
-        status: s.status === "active" ? "live" : "idle",
-        targetUrl: s.targetUrl,
-        ...(exec
-          ? {
-              currentAction: exec.currentAction,
-              executionState: exec.executionState,
-              findingId: exec.findingId,
-              recentSteps: exec.steps,
-              runId: exec.runId,
-              sequence: exec.sequence,
-              verdict: exec.verdict,
-            }
-          : {}),
-      }));
+      setMetadata((prev: Record<string, unknown> | null) => {
+        const safePrev = prev ?? {};
+        return {
+          ...safePrev,
+          browserSessionId: s.browserSessionId,
+          liveUrl: s.liveUrl ?? undefined,
+          status: s.status === "active" ? "live" : "idle",
+          targetUrl: s.targetUrl,
+          ...(exec
+            ? {
+                currentAction: exec.currentAction,
+                executionState: exec.executionState,
+                findingId: exec.findingId,
+                recentSteps: exec.steps,
+                runId: exec.runId,
+                sequence: exec.sequence,
+                verdict: exec.verdict,
+              }
+            : {}),
+        };
+      });
     }
   }, [sessionData, setArtifact, setMetadata]);
 

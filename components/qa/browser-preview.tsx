@@ -158,25 +158,31 @@ export function BrowserPreview({
       const s = sessionData.session;
       const exec = sessionData.execution;
       setMetadata((prev) => {
+        const safePrev = prev ?? {};
         // If currently CANCELLED or CANCELLING, do NOT allow regression to RUNNING, WAITING, or COMPLETED
         if (
-          (prev.executionState === "CANCELLED" ||
-            prev.executionState === "CANCELLING") &&
+          (safePrev.executionState === "CANCELLED" ||
+            safePrev.executionState === "CANCELLING") &&
           exec?.executionState !== "CANCELLED"
         ) {
-          return prev;
+          return safePrev;
         }
 
         // Monotonic sequence check: ignore stale snapshots
-        if (prev.sequence && exec?.sequence && exec.sequence < prev.sequence) {
-          return prev;
+        if (
+          safePrev.sequence &&
+          exec?.sequence &&
+          exec.sequence < safePrev.sequence
+        ) {
+          return safePrev;
         }
 
         return {
-          ...prev,
+          ...safePrev,
           browserScreenHeight:
-            s.browserScreenHeight ?? prev.browserScreenHeight,
-          browserScreenWidth: s.browserScreenWidth ?? prev.browserScreenWidth,
+            s.browserScreenHeight ?? safePrev.browserScreenHeight,
+          browserScreenWidth:
+            s.browserScreenWidth ?? safePrev.browserScreenWidth,
           browserSessionId: s.browserSessionId,
           liveUrl: s.liveUrl ?? undefined,
           status:
@@ -185,14 +191,14 @@ export function BrowserPreview({
           targetUrl: s.targetUrl,
           ...(exec
             ? {
-                currentAction: exec.currentAction || prev.currentAction,
-                errorMessage: exec.error || prev.errorMessage,
-                executionState: exec.executionState || prev.executionState,
-                findingId: exec.findingId || prev.findingId,
-                recentSteps: exec.steps || prev.recentSteps,
-                runId: exec.runId || prev.runId,
-                sequence: exec.sequence || prev.sequence,
-                verdict: exec.verdict || prev.verdict,
+                currentAction: exec.currentAction || safePrev.currentAction,
+                errorMessage: exec.error || safePrev.errorMessage,
+                executionState: exec.executionState || safePrev.executionState,
+                findingId: exec.findingId || safePrev.findingId,
+                recentSteps: exec.steps || safePrev.recentSteps,
+                runId: exec.runId || safePrev.runId,
+                sequence: exec.sequence || safePrev.sequence,
+                verdict: exec.verdict || safePrev.verdict,
               }
             : {}),
         };
@@ -264,15 +270,18 @@ export function BrowserPreview({
       });
       const data = await res.json();
       mutateSession();
-      setMetadata?.((prev) => ({
-        ...prev,
-        currentAction:
-          data?.execution?.currentAction || "Test was stopped by user.",
-        executionState: data?.execution?.executionState || "CANCELLED",
-        lastConfirmedAction: data?.execution?.lastConfirmedAction,
-        recentSteps: data?.execution?.steps || prev.recentSteps,
-        status: "stopped",
-      }));
+      setMetadata?.((prev) => {
+        const safePrev = prev ?? {};
+        return {
+          ...safePrev,
+          currentAction:
+            data?.execution?.currentAction || "Test was stopped by user.",
+          executionState: data?.execution?.executionState || "CANCELLED",
+          lastConfirmedAction: data?.execution?.lastConfirmedAction,
+          recentSteps: data?.execution?.steps || safePrev.recentSteps,
+          status: "stopped",
+        };
+      });
       window.dispatchEvent(
         new CustomEvent("qa:stop-requested", {
           detail: { chatId },
@@ -291,7 +300,7 @@ export function BrowserPreview({
     }
     setIsResuming(true);
     setMetadata?.((prev) => ({
-      ...prev,
+      ...(prev ?? {}),
       currentAction: "Resuming test execution...",
       executionState: "RESUMING",
       status: "working",
@@ -305,13 +314,16 @@ export function BrowserPreview({
       const data = await res.json();
       mutateSession();
       if (data?.execution) {
-        setMetadata?.((prev) => ({
-          ...prev,
-          currentAction: data.execution.currentAction || "Resuming test...",
-          executionState: data.execution.executionState || "RESUMING",
-          recentSteps: data.execution.steps || prev.recentSteps,
-          status: "working",
-        }));
+        setMetadata?.((prev) => {
+          const safePrev = prev ?? {};
+          return {
+            ...safePrev,
+            currentAction: data.execution.currentAction || "Resuming test...",
+            executionState: data.execution.executionState || "RESUMING",
+            recentSteps: data.execution.steps || safePrev.recentSteps,
+            status: "working",
+          };
+        });
       }
       window.dispatchEvent(
         new CustomEvent("qa:resume-requested", {

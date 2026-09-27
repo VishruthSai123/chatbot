@@ -480,22 +480,28 @@ function PureMultimodalInput({
           method: "POST",
         });
         const data = await res.json();
-        setMetadata?.((prev: any) => ({
-          ...prev,
-          currentAction:
-            data?.execution?.currentAction || "Test was stopped by user.",
-          executionState: data?.execution?.executionState || "CANCELLED",
-          lastConfirmedAction: data?.execution?.lastConfirmedAction,
-          recentSteps: data?.execution?.steps || prev?.recentSteps,
-          status: "stopped",
-        }));
+        setMetadata?.((prev: any) => {
+          const safePrev = prev ?? {};
+          return {
+            ...safePrev,
+            currentAction:
+              data?.execution?.currentAction || "Test was stopped by user.",
+            executionState: data?.execution?.executionState || "CANCELLED",
+            lastConfirmedAction: data?.execution?.lastConfirmedAction,
+            recentSteps: data?.execution?.steps || safePrev?.recentSteps,
+            status: "stopped",
+          };
+        });
       } catch {
-        setMetadata?.((prev: any) => ({
-          ...prev,
-          currentAction: "Test was stopped by user.",
-          executionState: "CANCELLED",
-          status: "stopped",
-        }));
+        setMetadata?.((prev: any) => {
+          const safePrev = prev ?? {};
+          return {
+            ...safePrev,
+            currentAction: "Test was stopped by user.",
+            executionState: "CANCELLED",
+            status: "stopped",
+          };
+        });
       }
     }
 
@@ -511,6 +517,9 @@ function PureMultimodalInput({
     setMessages((prev) => {
       const last = prev.at(-1);
       if (last && last.role === "assistant") {
+        const hasTools = (last.parts || []).some((p: any) =>
+          p.type?.startsWith("tool-")
+        );
         return [
           ...prev.slice(0, -1),
           {
@@ -529,7 +538,9 @@ function PureMultimodalInput({
                     }
                   : p
               ),
-              { text: "Test was stopped by user.", type: "text" },
+              ...(hasTools
+                ? []
+                : [{ text: "Test was stopped by user.", type: "text" }]),
             ],
           },
         ];
@@ -543,7 +554,7 @@ function PureMultimodalInput({
       const customEvent = e as CustomEvent<{ chatId: string }>;
       if (customEvent.detail?.chatId === chatId) {
         setMetadata?.((prev: any) => ({
-          ...prev,
+          ...(prev ?? {}),
           currentAction: "Stopping test execution...",
           executionState: "CANCELLING",
           status: "working",
@@ -563,7 +574,7 @@ function PureMultimodalInput({
       const customEvent = e as CustomEvent<{ chatId: string }>;
       if (customEvent.detail?.chatId === chatId) {
         setMetadata?.((prev: any) => ({
-          ...prev,
+          ...(prev ?? {}),
           currentAction: "Test was stopped by user.",
           executionState: "CANCELLED",
           status: "stopped",

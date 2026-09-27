@@ -184,6 +184,13 @@ const PurePreviewMessage = ({
     }
 
     if (type === "text") {
+      if (
+        qaParts.length > 0 &&
+        part.text?.trim() === "Test was stopped by user."
+      ) {
+        return null;
+      }
+
       return (
         <MessageContent
           className={cn("text-[13px] leading-[1.65]", {

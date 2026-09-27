@@ -43,6 +43,7 @@ import {
   saveMessages,
   updateChatTitleById,
   updateMessage,
+  updateTestSessionStatus,
 } from "@/lib/db/queries";
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
@@ -209,6 +210,24 @@ export async function POST(request: Request) {
     }
 
     if (message?.role === "user") {
+      // If the execution was previously cancelled or paused, a new user message
+      // is an explicit instruction to resume/continue. Transition run state to RESUMING.
+      const currentRun = ExecutionTracker.getActiveRun(id);
+      if (
+        currentRun &&
+        (currentRun.executionState === "CANCELLED" ||
+          currentRun.executionState === "PAUSED" ||
+          currentRun.isCancelRequested)
+      ) {
+        await ExecutionTracker.resumeRun({ chatId: id });
+      } else if (activeTestSession?.status === "cancelled") {
+        await updateTestSessionStatus({
+          force: true,
+          id: activeTestSession.id,
+          status: "active",
+        }).catch(() => null);
+      }
+
       await saveMessages({
         messages: [
           {
@@ -229,7 +248,41 @@ export async function POST(request: Request) {
     const isReasoningModel = capabilities?.reasoning === true;
     const supportsTools = capabilities?.tools === true;
 
-    const modelMessages = await convertToModelMessages(uiMessages);
+    // Sanitize historical tool calls: LLM APIs (Gemini/OpenAI) require that every functionCall
+    // in assistant messages has a corresponding functionResponse before the next user turn.
+    // Ensure all completed/stopped historical tool calls have resolved output.
+    const sanitizedUiMessages = uiMessages.map((msg, msgIdx) => {
+      if (msgIdx === uiMessages.length - 1) {
+        return msg;
+      }
+      if (msg.role !== "assistant" || !Array.isArray(msg.parts)) {
+        return msg;
+      }
+      return {
+        ...msg,
+        parts: msg.parts.map((part: any) => {
+          if (
+            typeof part === "object" &&
+            part !== null &&
+            typeof part.type === "string" &&
+            part.type.startsWith("tool-") &&
+            part.state !== "output-available"
+          ) {
+            return {
+              ...part,
+              output: part.output ?? {
+                isStopped: true,
+                output: "Test execution was stopped by user.",
+              },
+              state: "output-available",
+            };
+          }
+          return part;
+        }),
+      };
+    });
+
+    const modelMessages = await convertToModelMessages(sanitizedUiMessages);
 
     const stream = createUIMessageStream({
       execute: async ({ writer: dataStream }) => {

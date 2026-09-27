@@ -97,7 +97,9 @@ function PureArtifact({
     isLoading: isDocumentsFetching,
     mutate: mutateDocuments,
   } = useSWR<Document[]>(
-    artifact.documentId !== "init" && artifact.status !== "streaming"
+    artifact.documentId !== "init" &&
+      artifact.status !== "streaming" &&
+      !isBrowser
       ? `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/api/document?id=${artifact.documentId}`
       : null,
     fetcher
@@ -152,7 +154,7 @@ function PureArtifact({
 
   const handleContentChange = useCallback(
     (updatedContent: string) => {
-      if (!artifact) {
+      if (!artifact || isBrowser) {
         return;
       }
 
@@ -199,7 +201,7 @@ function PureArtifact({
         { revalidate: false }
       );
     },
-    [artifact, mutate]
+    [artifact, mutate, isBrowser]
   );
 
   const latestContentRef = useRef<string>("");
