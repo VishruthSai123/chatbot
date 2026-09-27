@@ -8,10 +8,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { useArtifact } from "@/hooks/use-artifact";
-import {
-  type ExecutionStep,
-  isTerminalExecutionState,
-} from "@/lib/qa/execution-types";
+import { isTerminalExecutionState } from "@/lib/qa/execution-types";
 import { cn } from "@/lib/utils";
 import { Shimmer } from "../ai-elements/shimmer";
 
@@ -171,49 +168,29 @@ export const AgentProcessing = memo(
         });
       }
 
-      // 2. Real Browser Use Cloud Sub-Steps (if available) or tool calls
-      const recentSteps: ExecutionStep[] =
-        (metadata?.recentSteps as ExecutionStep[]) || [];
-      if (recentSteps.length > 0) {
-        for (const subStep of recentSteps) {
-          items.push({
-            error: subStep.status === "failed" ? subStep.action : undefined,
-            id: `substep-${subStep.number ?? subStep.action}`,
-            label: subStep.action,
-            status:
-              subStep.status === "completed"
-                ? "completed"
-                : subStep.status === "failed"
-                  ? "failed"
-                  : "running",
-          });
-        }
-      } else {
-        // Fallback to high-level tool parts if no sub-steps received yet
-        runBrowserStepParts.forEach((stepPart, idx) => {
-          const instruction =
-            stepPart.input?.instruction || "Execute browser task";
-          const stepCount = stepPart.output?.stepCount;
-          const isPartError =
-            stepPart.state === "output-error" ||
-            Boolean(stepPart.output?.error);
+      // 2. High-level Browser Steps
+      for (const [idx, stepPart] of runBrowserStepParts.entries()) {
+        const instruction =
+          stepPart.input?.instruction || "Execute browser task";
+        const stepCount = stepPart.output?.stepCount;
+        const isPartError =
+          stepPart.state === "output-error" || Boolean(stepPart.output?.error);
 
-          items.push({
-            error: isPartError
-              ? String(stepPart.output?.error || "Action failed")
-              : undefined,
-            id: stepPart.toolCallId || `step-${idx}`,
-            label:
-              stepCount && stepCount > 1
-                ? `${instruction} (${stepCount} steps)`
-                : instruction,
-            status:
-              stepPart.state === "output-available" && !isPartError
-                ? "completed"
-                : isPartError
-                  ? "failed"
-                  : "running",
-          });
+        items.push({
+          error: isPartError
+            ? String(stepPart.output?.error || "Action failed")
+            : undefined,
+          id: stepPart.toolCallId || `step-${idx}`,
+          label:
+            stepCount && stepCount > 1
+              ? `${instruction} (${stepCount} steps)`
+              : instruction,
+          status:
+            stepPart.state === "output-available" && !isPartError
+              ? "completed"
+              : isPartError
+                ? "failed"
+                : "running",
         });
       }
 
@@ -249,7 +226,6 @@ export const AgentProcessing = memo(
       startTestSessionPart,
       runBrowserStepParts,
       evaluateTestResultPart,
-      metadata?.recentSteps,
       metadata?.targetUrl,
       execState,
     ]);

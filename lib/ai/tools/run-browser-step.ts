@@ -57,17 +57,17 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
           onStep: (step) => {
             stepCount += 1;
 
-            const actionText =
-              (step as any).nextGoal ??
-              (step as any).evaluationPreviousGoal ??
-              (step as any).output ??
+            const rawAction =
+              (typeof step.nextGoal === "string" && step.nextGoal.trim()) ||
+              (typeof step.evaluationPreviousGoal === "string" &&
+                step.evaluationPreviousGoal.trim()) ||
+              (typeof (step as any).output === "string" &&
+                (step as any).output.trim()) ||
               `Step ${stepCount}`;
 
+            const safeAction = rawAction || `Step ${stepCount}`;
             const urlText =
               (step as any).url ?? (step as any).currentUrl ?? undefined;
-
-            const safeAction =
-              typeof actionText === "string" ? actionText : String(actionText);
 
             // Update authoritative execution tracker
             const updatedRun = ExecutionTracker.updateStep({
@@ -78,7 +78,13 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
               url: urlText,
             });
 
-            // Stream step delta
+            // Stream status and step delta
+            dataStream.write({
+              data: safeAction,
+              transient: true,
+              type: "data-qa-status",
+            });
+
             dataStream.write({
               data: {
                 action: safeAction,

@@ -36,7 +36,6 @@ export interface RunBrowserTaskOptions {
   onStep?: (step: TaskStepView) => void | Promise<void>;
   onTaskId?: (taskId: string) => void;
   sessionId: string;
-  timeoutMs?: number;
 }
 
 export interface RunBrowserTaskResult {
@@ -182,12 +181,10 @@ export async function runBrowserTask({
   instruction,
   onStep,
   onTaskId,
-  timeoutMs = 75_000,
 }: RunBrowserTaskOptions): Promise<RunBrowserTaskResult> {
   const client = getBrowserUseClient();
   const taskRun = client.run(instruction, {
     sessionId,
-    timeout: timeoutMs,
   });
   const steps: TaskStepView[] = [];
 

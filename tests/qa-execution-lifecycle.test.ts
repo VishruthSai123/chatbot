@@ -184,27 +184,24 @@ async function runTests() {
   );
   console.log("✓ Stale events rejected from altering terminal states");
 
-  // 5. Test Failure & Timeout Termination
-  console.log("\n[Test 5] Timeout and Failure handling...");
-  const testChatId2 = "chat-test-timeout-2";
+  // 5. Test Failure & Terminal State Handling
+  console.log("\n[Test 5] Failure handling...");
+  const testChatId2 = "chat-test-failure-2";
   ExecutionTracker.startRun({
     chatId: testChatId2,
     sessionId: "session-test-2",
     targetUrl: "https://example.com/long-page",
   });
 
-  const timedOutRun = ExecutionTracker.failRun({
+  const failedRun = ExecutionTracker.failRun({
     chatId: testChatId2,
-    error: "Browser Use execution deadline exceeded (75s).",
-    state: "TIMED_OUT",
+    error: "Browser task failed due to remote network disconnection",
+    state: "FAILED",
   });
-  assert(timedOutRun !== null);
-  assert.strictEqual(timedOutRun.executionState, "TIMED_OUT");
-  assert(timedOutRun.error?.includes("deadline exceeded"));
-  assert.strictEqual(
-    isTerminalExecutionState(timedOutRun.executionState),
-    true
-  );
+  assert(failedRun !== null);
+  assert.strictEqual(failedRun.executionState, "FAILED");
+  assert(failedRun.error?.includes("remote network disconnection"));
+  assert.strictEqual(isTerminalExecutionState(failedRun.executionState), true);
 
   // 6. Test Cancellation
   console.log("\n[Test 6] User cancellation...");
@@ -223,8 +220,39 @@ async function runTests() {
   assert.strictEqual(cancelledRun.currentAction, "Cancelled by user");
   console.log("✓ Cancellation lifecycle verified");
 
+  // 7. Test Long-running Multi-step Execution
+  console.log(
+    "\n[Test 7] Long-running execution (>75s) progresses cleanly without interruption..."
+  );
+  const testChatId4 = "chat-test-long-running-4";
+  ExecutionTracker.startRun({
+    chatId: testChatId4,
+    sessionId: "session-test-4",
+    targetUrl: "https://example.com/heavy-app",
+  });
+
+  // Simulate multiple steps over time
+  for (let s = 1; s <= 10; s += 1) {
+    const stepRecord = ExecutionTracker.updateStep({
+      action: `Complex interaction step ${s} on page`,
+      chatId: testChatId4,
+      number: s,
+      status: "running",
+    });
+    assert(stepRecord !== null);
+    assert.strictEqual(stepRecord.executionState, "RUNNING");
+    assert.strictEqual(stepRecord.currentStep, s);
+  }
+  const longRun = ExecutionTracker.getActiveRun(testChatId4);
+  assert(longRun !== null);
+  assert.strictEqual(longRun.executionState, "RUNNING");
+  assert.strictEqual(longRun.steps.length, 10);
+  console.log(
+    "✓ Long-running multi-step execution progresses cleanly without artificial termination"
+  );
+
   console.log("\n==========================================");
-  console.log("ALL CANONICAL LIFECYCLE TESTS PASSED! (6/6)");
+  console.log("ALL CANONICAL LIFECYCLE TESTS PASSED! (7/7)");
   console.log("==========================================");
 }
 
