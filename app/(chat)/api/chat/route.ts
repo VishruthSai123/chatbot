@@ -354,7 +354,14 @@ export async function POST(request: Request) {
         ExecutionTracker.registerAbortController(id, chatAbortController);
 
         const onRequestAbort = () => {
-          chatAbortController.abort("client_disconnected");
+          // If the user explicitly requested cancellation via stop, abort chat execution
+          if (ExecutionTracker.isCancelRequested(id)) {
+            chatAbortController.abort("user_stopped");
+          } else {
+            console.log(
+              `[api/chat] Client HTTP transport disconnected for chat ${id}. Backend QA execution continues autonomously.`
+            );
+          }
         };
         request.signal.addEventListener("abort", onRequestAbort, {
           once: true,
@@ -390,10 +397,17 @@ export async function POST(request: Request) {
             stopWaitingStatus();
             request.signal.removeEventListener("abort", onRequestAbort);
             ExecutionTracker.unregisterAbortController(id);
-            ExecutionTracker.cancelRun({
-              chatId: id,
-              reason: "user_aborted_stream",
-            }).catch(() => null);
+            // ONLY cancel the QA execution if user explicitly clicked stop
+            if (ExecutionTracker.isCancelRequested(id)) {
+              ExecutionTracker.cancelRun({
+                chatId: id,
+                reason: "user_stopped",
+              }).catch(() => null);
+            } else {
+              console.log(
+                `[api/chat] Stream aborted for chat ${id}, but QA run was not cancelled by user. Preserving backend run.`
+              );
+            }
           },
           onChunk({ chunk }) {
             if (isModelStreamActivity(chunk)) {
@@ -409,13 +423,27 @@ export async function POST(request: Request) {
             stopWaitingStatus();
             request.signal.removeEventListener("abort", onRequestAbort);
             ExecutionTracker.unregisterAbortController(id);
-            ExecutionTracker.failRun({
-              chatId: id,
-              error:
-                error instanceof Error
-                  ? error.message
-                  : "Stream processing error",
-            });
+            const isClientDisconnect =
+              error instanceof Error &&
+              (error.name === "AbortError" ||
+                error.message?.includes("aborted") ||
+                error.message?.includes("client_disconnected") ||
+                error.message?.includes("ECONNRESET") ||
+                error.message?.includes("Premature close"));
+
+            // If the error was just an aborted HTTP connection from client drop, do not fail the background QA run!
+            if (
+              !isClientDisconnect &&
+              !ExecutionTracker.isCancelRequested(id)
+            ) {
+              ExecutionTracker.failRun({
+                chatId: id,
+                error:
+                  error instanceof Error
+                    ? error.message
+                    : "Stream processing error",
+              });
+            }
           },
           providerOptions: {
             ...(modelConfig?.gatewayOrder && {

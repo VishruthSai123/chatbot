@@ -284,6 +284,16 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
           taskId: result.taskId,
         };
       } catch (error) {
+        if (ExecutionTracker.isCancelRequested(chatId)) {
+          return {
+            isStopped: true,
+            output: "Test execution was stopped by the user.",
+            stepCount: 0,
+            success: false,
+            taskId: null,
+          };
+        }
+
         const message =
           error instanceof Error ? error.message : "Unknown browser error";
         const isTimeout =

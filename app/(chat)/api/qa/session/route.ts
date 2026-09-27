@@ -44,9 +44,36 @@ export async function GET(request: Request) {
     if (testSession.browserSessionId && testSession.status === "active") {
       try {
         const client = getBrowserUseClient();
-        const cloudSession = await client.sessions.get(
-          testSession.browserSessionId
-        );
+        let cloudSession: any = null;
+        try {
+          cloudSession = await client.sessions.get(
+            testSession.browserSessionId
+          );
+        } catch (fetchErr: any) {
+          // Bounded retry on network glitch
+          const isTransient =
+            fetchErr?.message?.includes("fetch") ||
+            fetchErr?.message?.includes("network") ||
+            fetchErr?.message?.includes("timeout") ||
+            fetchErr?.code === "ECONNRESET";
+          if (isTransient) {
+            await new Promise((r) => setTimeout(r, 500));
+            cloudSession = await client.sessions
+              .get(testSession.browserSessionId)
+              .catch(() => null);
+          } else if (
+            fetchErr?.status === 404 ||
+            fetchErr?.message?.includes("not found")
+          ) {
+            // Truly terminated on cloud
+            currentStatus = "completed";
+            await updateTestSessionStatus({
+              id: testSession.id,
+              status: "completed",
+            }).catch(() => null);
+          }
+        }
+
         if (cloudSession && cloudSession.status !== "active") {
           currentStatus = "completed";
           await updateTestSessionStatus({
@@ -63,17 +90,17 @@ export async function GET(request: Request) {
             liveUrl = cloudLiveUrl;
             await updateTestSessionStatus({
               id: testSession.id,
-              liveUrl,
+              liveUrl: liveUrl ?? undefined,
               status: "active",
             });
           }
         }
-      } catch {
-        currentStatus = "completed";
-        await updateTestSessionStatus({
-          id: testSession.id,
-          status: "completed",
-        }).catch(() => null);
+      } catch (err) {
+        // Network instability must NOT mark active session as completed
+        console.warn(
+          `[QA Session API] Network glitch querying cloud session ${testSession.browserSessionId}. Preserving active status:`,
+          err
+        );
       }
     }
 

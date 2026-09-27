@@ -80,7 +80,7 @@ export function BrowserPreview({
 }: BrowserPreviewProps) {
   const { chatId, browserDimensions, setBrowserDimensions } = useActiveChat();
   const { setArtifact } = useArtifact();
-  const [iframeKey] = useState<number>(0);
+  const [iframeKey, setIframeKey] = useState<number>(0);
   const [isStopping, setIsStopping] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -133,6 +133,11 @@ export function BrowserPreview({
     return `/api/qa/session?${params.toString()}`;
   }, [chatId, wrapperDimensions]);
 
+  // Network connectivity tracking
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator === "undefined" ? true : navigator.onLine
+  );
+
   const {
     data: sessionData,
     error: sessionFetchError,
@@ -151,9 +156,47 @@ export function BrowserPreview({
     } | null;
     execution: any;
   }>(sessionQuery, fetcher, {
-    refreshInterval: isExecuting ? 2000 : 0,
-    revalidateOnFocus: false,
+    errorRetryInterval: 2500,
+    refreshInterval: (latestData) => {
+      const isRemoteActive =
+        latestData?.execution?.executionState === "STARTING" ||
+        latestData?.execution?.executionState === "RUNNING" ||
+        latestData?.execution?.executionState === "WAITING" ||
+        latestData?.execution?.executionState === "FINALIZING" ||
+        latestData?.execution?.executionState === "RESUMING";
+      return isExecuting || isRemoteActive || !isOnline ? 2000 : 0;
+    },
+    revalidateOnFocus: true,
+    revalidateOnReconnect: true,
+    shouldRetryOnError: true,
   });
+
+  const isBackendActive =
+    sessionData?.execution?.executionState === "STARTING" ||
+    sessionData?.execution?.executionState === "RUNNING" ||
+    sessionData?.execution?.executionState === "WAITING" ||
+    sessionData?.execution?.executionState === "FINALIZING" ||
+    sessionData?.execution?.executionState === "RESUMING";
+
+  const isNetworkInterrupted =
+    !isOnline ||
+    (Boolean(sessionFetchError) && (isExecuting || isBackendActive));
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      mutateSession();
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [mutateSession]);
 
   // Sync DB session and execution into metadata if found
   useEffect(() => {
@@ -258,8 +301,7 @@ export function BrowserPreview({
     (liveUrl ? "live" : isSessionFetching ? "connecting" : "idle");
   const status: BrowserStatus =
     metadata?.executionState === "TIMED_OUT" ||
-    metadata?.executionState === "FAILED" ||
-    sessionFetchError
+    metadata?.executionState === "FAILED"
       ? "error"
       : metadata?.executionState === "CANCELLED"
         ? "stopped"
@@ -284,6 +326,14 @@ export function BrowserPreview({
   }, [setArtifact]);
 
   const handleRetry = useCallback(() => {
+    mutateSession();
+  }, [mutateSession]);
+
+  const handleReloadIframe = useCallback(() => {
+    setIframeKey((k) => k + 1);
+  }, []);
+
+  const handleSyncSession = useCallback(() => {
     mutateSession();
   }, [mutateSession]);
 
@@ -513,7 +563,12 @@ export function BrowserPreview({
 
             {/* Subtle Live Status Indicator */}
             <div className="flex items-center gap-1.5 text-[11px]">
-              {isStopping || metadata?.executionState === "CANCELLING" ? (
+              {isNetworkInterrupted ? (
+                <span className="flex items-center gap-1 font-medium text-amber-500">
+                  <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
+                  Reconnecting…
+                </span>
+              ) : isStopping || metadata?.executionState === "CANCELLING" ? (
                 <span className="flex items-center gap-1 font-medium text-amber-500">
                   <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
                   Cancelling…
@@ -563,20 +618,37 @@ export function BrowserPreview({
         {/* Right: Essential Workspace Controls */}
         <div className="flex items-center gap-1 shrink-0">
           {liveUrl ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label="Open live view in new tab"
-                  className="size-7 text-muted-foreground hover:text-foreground"
-                  onClick={handleOpenExternal}
-                  size="icon"
-                  variant="ghost"
-                >
-                  <ExternalLink className="size-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Open in new tab</TooltipContent>
-            </Tooltip>
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    aria-label="Reload browser view"
+                    className="size-7 text-muted-foreground hover:text-foreground"
+                    onClick={handleReloadIframe}
+                    size="icon"
+                    variant="ghost"
+                  >
+                    <RotateCw className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Reload browser view</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    aria-label="Open live view in new tab"
+                    className="size-7 text-muted-foreground hover:text-foreground"
+                    onClick={handleOpenExternal}
+                    size="icon"
+                    variant="ghost"
+                  >
+                    <ExternalLink className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Open in new tab</TooltipContent>
+              </Tooltip>
+            </>
           ) : null}
 
           <Tooltip>
@@ -685,6 +757,25 @@ export function BrowserPreview({
           </Tooltip>
         </div>
       </div>
+
+      {/* ─── NETWORK INTERRUPTED NOTIFICATION BANNER ─── */}
+      {isNetworkInterrupted ? (
+        <div className="flex items-center justify-between gap-2 px-3.5 py-1.5 bg-amber-500/10 border-b border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs shrink-0 select-text">
+          <div className="flex items-center gap-2 truncate">
+            <Loader2 className="size-3.5 animate-spin shrink-0 text-amber-500" />
+            <span className="truncate">
+              Connection interrupted — your test is still running. Reconnecting…
+            </span>
+          </div>
+          <button
+            className="text-[11px] font-medium underline hover:text-foreground shrink-0 cursor-pointer"
+            onClick={handleSyncSession}
+            type="button"
+          >
+            Sync State
+          </button>
+        </div>
+      ) : null}
 
       {/* ─── BROWSER USE LIVE FRAME (Aspect-ratio matching with zero letterbox gaps) ─── */}
       <div

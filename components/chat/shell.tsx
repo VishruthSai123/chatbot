@@ -58,7 +58,7 @@ export function ChatShell() {
   const isBrowser = artifact.kind === "browser";
   const isFullscreen = Boolean(metadata?.isFullscreen);
 
-  // Restore active browser session and execution state on page load/refresh
+  // Restore active browser session and execution state on page load/refresh/reconnect
   const { data: sessionData } = useSWR<{
     session: {
       id: string;
@@ -69,13 +69,15 @@ export function ChatShell() {
     } | null;
     execution: any;
   }>(chatId ? `/api/qa/session?chatId=${chatId}` : null, fetcher, {
-    revalidateOnFocus: false,
+    revalidateOnFocus: true,
+    revalidateOnReconnect: true,
   });
 
   const hasRestoredSessionRef = useRef<string | null>(null);
   useEffect(() => {
     const s = sessionData?.session;
     const exec = sessionData?.execution;
+
     if (s?.liveUrl && hasRestoredSessionRef.current !== s.id) {
       hasRestoredSessionRef.current = s.id;
       setArtifact((prev) => {
@@ -91,23 +93,58 @@ export function ChatShell() {
           title: s.targetUrl || "Live Browser",
         };
       });
+    }
+
+    if (s && setMetadata) {
       setMetadata((prev: Record<string, unknown> | null) => {
         const safePrev = prev ?? {};
+        const isSameRun =
+          !exec?.runId || !safePrev?.runId || exec.runId === safePrev.runId;
+        const isNewerSequence = Boolean(
+          exec?.sequence &&
+            safePrev?.sequence &&
+            exec.sequence > safePrev.sequence
+        );
+        const isResumingOrStarting =
+          exec?.executionState === "RESUMING" ||
+          exec?.executionState === "STARTING" ||
+          exec?.executionState === "RUNNING";
+
+        if (
+          (safePrev.executionState === "CANCELLED" ||
+            safePrev.executionState === "CANCELLING") &&
+          exec?.executionState !== "CANCELLED" &&
+          isSameRun &&
+          !isNewerSequence &&
+          !isResumingOrStarting
+        ) {
+          return safePrev;
+        }
+
+        if (
+          isSameRun &&
+          safePrev.sequence &&
+          exec?.sequence &&
+          exec.sequence < safePrev.sequence
+        ) {
+          return safePrev;
+        }
+
         return {
           ...safePrev,
-          browserSessionId: s.browserSessionId,
-          liveUrl: s.liveUrl ?? undefined,
-          status: s.status === "active" ? "live" : "idle",
-          targetUrl: s.targetUrl,
+          browserSessionId: s.browserSessionId || safePrev.browserSessionId,
+          liveUrl: s.liveUrl ?? safePrev.liveUrl,
+          status: s.status === "active" ? "live" : safePrev.status || "idle",
+          targetUrl: s.targetUrl || safePrev.targetUrl,
           ...(exec
             ? {
-                currentAction: exec.currentAction,
-                executionState: exec.executionState,
-                findingId: exec.findingId,
-                recentSteps: exec.steps,
-                runId: exec.runId,
-                sequence: exec.sequence,
-                verdict: exec.verdict,
+                currentAction: exec.currentAction || safePrev.currentAction,
+                executionState: exec.executionState || safePrev.executionState,
+                findingId: exec.findingId || safePrev.findingId,
+                recentSteps: exec.steps || safePrev.recentSteps,
+                runId: exec.runId || safePrev.runId,
+                sequence: exec.sequence || safePrev.sequence,
+                verdict: exec.verdict || safePrev.verdict,
               }
             : {}),
         };

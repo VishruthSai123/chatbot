@@ -238,14 +238,22 @@ export const AgentProcessing = memo(
       : metadata?.executionState;
     const isCanonicalTerminal = isTerminalExecutionState(execState);
 
-    const isError =
-      Boolean(errorPart) ||
-      execState === "FAILED" ||
-      execState === "TIMED_OUT" ||
-      Boolean(metadata?.errorMessage);
+    // Network connectivity tracking
+    const [isOnline, setIsOnline] = useState(
+      typeof navigator === "undefined" ? true : navigator.onLine
+    );
+    useEffect(() => {
+      const handleOnline = () => setIsOnline(true);
+      const handleOffline = () => setIsOnline(false);
+      window.addEventListener("online", handleOnline);
+      window.addEventListener("offline", handleOffline);
+      return () => {
+        window.removeEventListener("online", handleOnline);
+        window.removeEventListener("offline", handleOffline);
+      };
+    }, []);
 
-    // Historical messages must NEVER be inferred as active execution.
-    // An execution is ONLY active if the stream is live (isLoading) or tracker explicitly says so.
+    // Active execution tracking: authoritative tracker state takes precedence
     const isTrackerActive =
       execState === "STARTING" ||
       execState === "RUNNING" ||
@@ -256,6 +264,14 @@ export const AgentProcessing = memo(
 
     const isToolStreamActive =
       isLoading && (isStartRunning || isRunStepRunning || isEvalRunning);
+
+    // A frontend stream error or disconnect must NOT mark an active backend QA test as failed!
+    const isError =
+      !isTrackerActive &&
+      (Boolean(errorPart) ||
+        execState === "FAILED" ||
+        execState === "TIMED_OUT" ||
+        Boolean(metadata?.errorMessage));
 
     const isAnyRunning =
       !isError &&
@@ -459,6 +475,10 @@ export const AgentProcessing = memo(
         return "Cancelling...";
       }
 
+      if (!isOnline && isAnyRunning) {
+        return "Connection interrupted — your test is still running.";
+      }
+
       if (isThisMessageStopped || execState === "CANCELLED") {
         return "Test was stopped by user.";
       }
@@ -565,6 +585,7 @@ export const AgentProcessing = memo(
       startTestSessionPart,
       runBrowserStepParts,
       evaluateTestResultPart,
+      isOnline,
     ]);
 
     const validActions = useMemo(
@@ -579,6 +600,9 @@ export const AgentProcessing = memo(
       }
       if (execState === "CANCELLING") {
         return "Cancelling...";
+      }
+      if (!isOnline && isAnyRunning) {
+        return "Reconnecting…";
       }
       if (isAnyRunning) {
         return elapsedSeconds > 0
@@ -601,6 +625,7 @@ export const AgentProcessing = memo(
       elapsedSeconds,
       persistedDuration,
       validActions.length,
+      isOnline,
     ]);
 
     return (

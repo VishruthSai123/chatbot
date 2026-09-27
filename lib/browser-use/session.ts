@@ -82,9 +82,31 @@ export async function getOrCreateBrowserSession({
     if (sameTarget) {
       // Reuse existing active session for the same target application
       try {
-        const liveSession = await client.sessions.get(
-          existing.browserSessionId
-        );
+        let liveSession: any = null;
+        try {
+          liveSession = await client.sessions.get(existing.browserSessionId);
+        } catch (fetchErr: any) {
+          const isTransient =
+            fetchErr?.message?.includes("fetch") ||
+            fetchErr?.message?.includes("network") ||
+            fetchErr?.message?.includes("timeout") ||
+            fetchErr?.code === "ECONNRESET";
+          if (isTransient) {
+            await new Promise((r) => setTimeout(r, 500));
+            liveSession = await client.sessions
+              .get(existing.browserSessionId)
+              .catch(() => null);
+          } else if (
+            fetchErr?.status === 404 ||
+            fetchErr?.message?.includes("not found")
+          ) {
+            // Truly terminated on cloud
+            liveSession = null;
+          } else {
+            throw fetchErr;
+          }
+        }
+
         if (liveSession && liveSession.status === "active") {
           return {
             browserScreenHeight:
@@ -99,23 +121,41 @@ export async function getOrCreateBrowserSession({
           };
         }
 
-        // Cloud session is no longer active (e.g. stopped, expired)
-        console.log(
-          `[BrowserUse] Existing session ${existing.browserSessionId} is ${liveSession?.status ?? "inactive"}. Marking completed in DB.`
-        );
-        await updateTestSessionStatus({
-          id: existing.id,
-          status: "completed",
-        });
+        if (liveSession && liveSession.status !== "active") {
+          // Cloud session is no longer active (e.g. stopped, expired)
+          console.log(
+            `[BrowserUse] Existing session ${existing.browserSessionId} is ${liveSession.status}. Marking completed in DB.`
+          );
+          await updateTestSessionStatus({
+            id: existing.id,
+            status: "completed",
+          });
+        } else if (!liveSession) {
+          // Fallback: If network check was inconclusive, preserve existing session record to avoid duplicating actions
+          return {
+            browserScreenHeight,
+            browserScreenWidth,
+            browserSessionId: existing.browserSessionId,
+            id: existing.id,
+            isExisting: true,
+            liveUrl: existing.liveUrl ?? null,
+            targetUrl: existing.targetUrl,
+          };
+        }
       } catch (checkError) {
         console.warn(
-          `[BrowserUse] Failed to query existing session ${existing.browserSessionId}, marking completed in DB:`,
+          `[BrowserUse] Network glitch querying existing session ${existing.browserSessionId}. Preserving existing session:`,
           checkError
         );
-        await updateTestSessionStatus({
+        return {
+          browserScreenHeight,
+          browserScreenWidth,
+          browserSessionId: existing.browserSessionId,
           id: existing.id,
-          status: "completed",
-        });
+          isExisting: true,
+          liveUrl: existing.liveUrl ?? null,
+          targetUrl: existing.targetUrl,
+        };
       }
     } else {
       // Target changed: terminate old cloud session cleanly to prevent resource leak
