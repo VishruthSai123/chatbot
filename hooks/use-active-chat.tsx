@@ -63,27 +63,10 @@ function extractChatId(pathname: string): string | null {
 export function computeInitialBrowserDimensions(): {
   width: number;
   height: number;
-} | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const isMobile = window.innerWidth < 768;
-  const isSm = window.innerWidth >= 640;
-  const horizontalPadding = isSm ? 20 : 16;
-  const verticalPadding = isSm ? 20 : 16;
-  const headerHeight = 44;
-
-  const width = isMobile
-    ? Math.round(window.innerWidth - horizontalPadding)
-    : Math.round(window.innerWidth * 0.6 - horizontalPadding);
-  const height = Math.round(
-    window.innerHeight - headerHeight - verticalPadding
-  );
-
+} {
   return {
-    height: Math.max(360, height),
-    width: Math.max(360, width),
+    height: 880,
+    width: 1440,
   };
 }
 

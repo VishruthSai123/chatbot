@@ -27,11 +27,11 @@ import { cn } from "@/lib/utils";
 export const SIMULATOR_CONFIG = {
   // Automatically connect to Browser Use Cloud on page load
   autoConnect: false,
-  // Default cloud browser resolution matching Browser Use dashboard
-  defaultHeight: 1002,
+  // Default cloud browser resolution
+  defaultHeight: 880,
   // Default target website for live tests
   defaultTargetUrl: "https://example.com",
-  defaultWidth: 1442,
+  defaultWidth: 1440,
   // Toggle the test overlay display (true = show overlay, false = hide overlay)
   enableOverlay: true,
   // Default view: true = 60% right panel / 40% mock chat (ditto layout); false = 100% full panel
@@ -47,6 +47,12 @@ interface PresetOption {
 }
 
 const DIMENSION_PRESETS: PresetOption[] = [
+  {
+    h: 880,
+    label: "1440 × 880 (Optimal Fit)",
+    ratio: 1440 / 880,
+    w: 1440,
+  },
   {
     h: 1002,
     label: "1442 × 1002 (Browser Use Default)",

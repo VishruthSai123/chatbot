@@ -73,7 +73,7 @@ export function BrowserPreview({
   setMetadata,
   title,
 }: BrowserPreviewProps) {
-  const { chatId, browserDimensions, setBrowserDimensions } = useActiveChat();
+  const { chatId, browserDimensions } = useActiveChat();
   const { setArtifact } = useArtifact();
   const [iframeKey] = useState<number>(0);
   const [isStopping, setIsStopping] = useState(false);
@@ -97,13 +97,12 @@ export function BrowserPreview({
             width: Math.round(width),
           };
           setWrapperDimensions(dims);
-          setBrowserDimensions?.(dims);
         }
       }
     });
     ro.observe(wrapperRef.current);
     return () => ro.disconnect();
-  }, [setBrowserDimensions]);
+  }, []);
 
   // If liveUrl is not in metadata, fetch active session from DB for this chatId
   const shouldFetchSession = !metadata?.liveUrl && Boolean(chatId);
@@ -263,7 +262,7 @@ export function BrowserPreview({
     if (browserDimensions?.width && browserDimensions?.height) {
       return browserDimensions.width / browserDimensions.height;
     }
-    return 1100 / 1440;
+    return 1440 / 880;
   }, [
     metadata?.browserScreenWidth,
     metadata?.browserScreenHeight,
