@@ -133,11 +133,11 @@ export async function getOrCreateBrowserSession({
 
   // Adaptive screen sizing:
   // Dynamically use the pre-computed dimensions matching the user's screen ratio.
-  // Fall back to 1320x1280 (~1:1) to prevent letterboxing in the QA preview.
-  let finalWidth = browserScreenWidth ? Math.round(browserScreenWidth) : 1320;
+  // Fall back to 1100x1440 (~1:1.3) to prevent letterboxing in the QA preview.
+  let finalWidth = browserScreenWidth ? Math.round(browserScreenWidth) : 1100;
   let finalHeight = browserScreenHeight
     ? Math.round(browserScreenHeight)
-    : Math.round(finalWidth * (1280 / 1320));
+    : Math.round(finalWidth * (1440 / 1100));
 
   // Clamp within safe browser limits (min 360px, max 3840px / 2160px)
   finalWidth = Math.min(Math.max(finalWidth, 360), 3840);
