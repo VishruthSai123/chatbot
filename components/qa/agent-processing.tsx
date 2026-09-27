@@ -176,6 +176,21 @@ function formatTargetDomain(urlStr?: string): { domain: string; full: string } {
   }
 }
 
+function SparkleMiniIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={className}
+      fill="currentColor"
+      height="12"
+      viewBox="0 0 16 16"
+      width="12"
+    >
+      <path d="M8 0C8 4.41828 4.41828 8 0 8C4.41828 8 8 11.5817 8 16C8 11.5817 11.5817 8 16 8C11.5817 8 8 4.41828 8 0Z" />
+    </svg>
+  );
+}
+
 export const AgentProcessing = memo(
   ({
     className,
@@ -232,11 +247,57 @@ export const AgentProcessing = memo(
         p.output?.output === "Test execution was stopped by user."
     );
 
+    // Check if this message's evaluation has completed
+    const isEvalCompleted = Boolean(
+      evaluateTestResultPart &&
+        (evaluateTestResultPart.state === "output-available" ||
+          evaluateTestResultPart.state === "output-error")
+    );
+
+    // Check if all tool parts in this message have resolved
+    const areAllMessageToolsResolved =
+      parts.length > 0 &&
+      parts.every(
+        (p) =>
+          p.state === "output-available" ||
+          p.state === "output-error" ||
+          p.state === "output-denied"
+      );
+
+    const hasAnyActiveTool = Boolean(
+      isStartRunning || isRunStepRunning || isEvalRunning
+    );
+
+    // Terminal completion resolution:
+    // If evaluation completed, or stream finished with all tools resolved and no active tool
+    const isMessageFinished =
+      isEvalCompleted ||
+      (!isLoading && areAllMessageToolsResolved && !hasAnyActiveTool);
+
     // If this message was stopped, its state is frozen at CANCELLED and never affected by future runs
     const execState = isThisMessageStopped
       ? "CANCELLED"
-      : metadata?.executionState;
+      : isMessageFinished
+        ? errorPart
+          ? "FAILED"
+          : metadata?.executionState === "CANCELLED"
+            ? "CANCELLED"
+            : "COMPLETED"
+        : metadata?.executionState;
+
     const isCanonicalTerminal = isTerminalExecutionState(execState);
+    const isMetadataTerminal =
+      metadata?.status === "completed" ||
+      metadata?.status === "stopped" ||
+      metadata?.status === "failed" ||
+      metadata?.status === "error";
+
+    const isTerminal =
+      isCanonicalTerminal ||
+      isMetadataTerminal ||
+      isThisMessageStopped ||
+      isMessageFinished ||
+      Boolean(metadata?.finding && !isThisMessageStopped);
 
     // Network connectivity tracking
     const [isOnline, setIsOnline] = useState(
@@ -253,17 +314,17 @@ export const AgentProcessing = memo(
       };
     }, []);
 
-    // Active execution tracking: authoritative tracker state takes precedence
+    // Active execution tracking: authoritative tracker state takes precedence unless terminal
     const isTrackerActive =
-      execState === "STARTING" ||
-      execState === "RUNNING" ||
-      execState === "WAITING" ||
-      execState === "RESUMING" ||
-      execState === "FINALIZING" ||
-      execState === "CANCELLING";
+      !isTerminal &&
+      (execState === "STARTING" ||
+        execState === "RUNNING" ||
+        (execState === "WAITING" && isLoading) ||
+        execState === "RESUMING" ||
+        execState === "FINALIZING" ||
+        execState === "CANCELLING");
 
-    const isToolStreamActive =
-      isLoading && (isStartRunning || isRunStepRunning || isEvalRunning);
+    const isToolStreamActive = isLoading && !isTerminal && hasAnyActiveTool;
 
     // A frontend stream error or disconnect must NOT mark an active backend QA test as failed!
     const isError =
@@ -271,13 +332,15 @@ export const AgentProcessing = memo(
       (Boolean(errorPart) ||
         execState === "FAILED" ||
         execState === "TIMED_OUT" ||
+        metadata?.status === "failed" ||
+        metadata?.status === "error" ||
         Boolean(metadata?.errorMessage));
 
     const isAnyRunning =
+      !isTerminal &&
       !isError &&
       !isThisMessageStopped &&
       execState !== "CANCELLED" &&
-      !isCanonicalTerminal &&
       (isTrackerActive || isToolStreamActive);
 
     // Track active execution duration
@@ -593,6 +656,21 @@ export const AgentProcessing = memo(
       [actions]
     );
 
+    const backendDuration = useMemo(() => {
+      const start = metadata?.startedAt
+        ? new Date(metadata.startedAt).getTime()
+        : null;
+      const end = metadata?.completedAt
+        ? new Date(metadata.completedAt).getTime()
+        : metadata?.cancelledAt
+          ? new Date(metadata.cancelledAt).getTime()
+          : null;
+      if (start && end && end >= start) {
+        return Math.max(1, Math.round((end - start) / 1000));
+      }
+      return null;
+    }, [metadata?.startedAt, metadata?.completedAt, metadata?.cancelledAt]);
+
     // Duration formatting for subtle AI-assistant header
     const durationDisplay = useMemo(() => {
       if (execState === "RESUMING") {
@@ -612,6 +690,9 @@ export const AgentProcessing = memo(
       if (persistedDuration !== null) {
         return `Worked for ${persistedDuration}s`;
       }
+      if (backendDuration !== null) {
+        return `Worked for ${backendDuration}s`;
+      }
       if (elapsedSeconds > 0) {
         return `Worked for ${elapsedSeconds}s`;
       }
@@ -624,6 +705,7 @@ export const AgentProcessing = memo(
       isAnyRunning,
       elapsedSeconds,
       persistedDuration,
+      backendDuration,
       validActions.length,
       isOnline,
     ]);
@@ -631,7 +713,7 @@ export const AgentProcessing = memo(
     return (
       <Collapsible
         className={cn(
-          "not-prose my-1.5 w-full max-w-[min(100%,560px)] select-text",
+          "not-prose w-full max-w-[min(100%,560px)] select-text",
           className
         )}
         onOpenChange={setIsOpen}
@@ -640,20 +722,18 @@ export const AgentProcessing = memo(
         {/* Subtle, premium header: ✦ Working for 13s ˅ */}
         <CollapsibleTrigger
           className={cn(
-            "group inline-flex items-center gap-1.5 text-xs text-muted-foreground/75 transition-colors select-none",
+            "group inline-flex h-[calc(13px*1.65)] items-center gap-1.5 text-xs text-muted-foreground/75 transition-colors select-none",
             validActions.length > 0
               ? "hover:text-foreground cursor-pointer"
               : "cursor-default pointer-events-none"
           )}
         >
-          <span className="text-[10px] text-muted-foreground/50 transition-colors group-hover:text-foreground/70">
-            ✦
-          </span>
-          <span className="font-normal">{durationDisplay}</span>
+          <SparkleMiniIcon className="size-3 shrink-0 text-muted-foreground/60 transition-colors group-hover:text-foreground/80" />
+          <span className="font-normal leading-none">{durationDisplay}</span>
           {validActions.length > 0 && (
             <ChevronDownIcon
               className={cn(
-                "size-3 text-muted-foreground/50 transition-transform duration-200 group-hover:text-foreground",
+                "size-3 shrink-0 text-muted-foreground/50 transition-transform duration-200 group-hover:text-foreground",
                 isOpen ? "rotate-180" : "rotate-0"
               )}
             />
@@ -687,7 +767,7 @@ export const AgentProcessing = memo(
 
         {/* Lightweight Execution Steps (No heavy boxes, no arrows, clean semantic icons) */}
         {validActions.length > 0 && (
-          <CollapsibleContent className="mt-2 space-y-1 pl-0.5">
+          <CollapsibleContent className="mt-1.5 space-y-1 pl-0.5 overflow-hidden data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-top-1.5 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1.5 duration-200 ease-out">
             {validActions.map((action) => (
               <div
                 className="group/row flex items-start gap-2.5 py-1 text-left transition-colors"
