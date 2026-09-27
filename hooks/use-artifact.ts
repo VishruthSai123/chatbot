@@ -41,9 +41,7 @@ export function useArtifactMetadataSelector<Selected>(
 ) {
   const documentId = useArtifactSelector((state) => state.documentId);
   const { data: localArtifactMetadata } = useSWR<any>(
-    documentId && documentId !== "init"
-      ? `artifact-metadata-${documentId}`
-      : null,
+    documentId ? `artifact-metadata-${documentId}` : null,
     null,
     {
       fallbackData: null,

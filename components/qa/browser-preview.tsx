@@ -291,22 +291,11 @@ export function BrowserPreview({
       return;
     }
 
-    if (sessionData?.session?.isEnded && setMetadata) {
-      setMetadata((prev) => {
-        if (!prev?.liveUrl) {
-          return prev ?? {};
-        }
-        return {
-          ...prev,
-          liveUrl: undefined,
-        };
-      });
-    }
-
-    if (sessionData?.session?.liveUrl && setMetadata) {
+    if (sessionData?.session && setMetadata) {
       const s = sessionData.session;
       const exec = sessionData.execution;
       const f = sessionData.finding;
+      const isEnded = Boolean(s.isEnded);
       setMetadata((prev) => {
         const safePrev = prev ?? {};
 
@@ -362,7 +351,7 @@ export function BrowserPreview({
           browserScreenWidth:
             s.browserScreenWidth ?? safePrev.browserScreenWidth,
           browserSessionId: s.browserSessionId,
-          liveUrl: s.liveUrl ?? undefined,
+          liveUrl: isEnded ? undefined : (s.liveUrl ?? undefined),
           status: isTerminal
             ? computedStatus
             : ((s.status === "active" ? "live" : (s.status as BrowserStatus)) ??

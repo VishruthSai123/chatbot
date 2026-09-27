@@ -268,6 +268,13 @@ function updateStep({
   run.lastActivityAt = new Date().toISOString();
   run.sequence += 1;
 
+  // Mark all previous steps as completed
+  for (const existingStep of run.steps) {
+    if (existingStep.number < number && existingStep.status === "running") {
+      existingStep.status = "completed";
+    }
+  }
+
   const existingStepIdx = run.steps.findIndex((s) => s.number === number);
   const stepData: ExecutionStep = {
     action,
@@ -328,6 +335,13 @@ function recordWaiting({
   run.lastActivityAt = new Date().toISOString();
   run.sequence += 1;
 
+  // Mark all steps completed since browser task is done
+  for (const step of run.steps) {
+    if (step.status === "running") {
+      step.status = "completed";
+    }
+  }
+
   persistExecutionSnapshot(run);
   return run;
 }
@@ -361,6 +375,13 @@ function recordFinalizing({
   run.currentAction = "Verifying assertions and recording findings...";
   run.lastActivityAt = new Date().toISOString();
   run.sequence += 1;
+
+  // Mark all steps completed
+  for (const step of run.steps) {
+    if (step.status === "running") {
+      step.status = "completed";
+    }
+  }
 
   persistExecutionSnapshot(run);
   return run;
@@ -456,9 +477,15 @@ function failRun({
 
   if (run.steps.length > 0) {
     const last = run.steps.at(-1);
-    if (last && last.status === "running") {
-      last.status = "failed";
-      last.error = error;
+    for (const step of run.steps) {
+      if (step === last) {
+        if (step.status === "running") {
+          step.status = "failed";
+          step.error = error;
+        }
+      } else if (step.status === "running") {
+        step.status = "completed";
+      }
     }
   }
 
@@ -612,9 +639,11 @@ async function cancelRun({
   run.currentAction = "Test stopped by user";
   run.sequence += 1;
 
-  // Mark last step cleanly
-  if (lastStep && lastStep.status === "running") {
-    lastStep.status = "completed";
+  // Mark all steps cleanly
+  for (const step of run.steps) {
+    if (step.status === "running") {
+      step.status = "completed";
+    }
   }
 
   await persistExecutionSnapshot(run);
@@ -645,7 +674,9 @@ async function cancelRun({
                     {
                       input: {
                         instruction:
-                          run.currentAction || "Execute browser task",
+                          run.originalIntent ||
+                          run.currentAction ||
+                          "Execute browser task",
                       },
                       output: {
                         isStopped: true,
@@ -812,6 +843,451 @@ function getDownloads(runId: string): DownloadItem[] {
 }
 
 /**
+ * Persists an assistant message if the last message in DB is from user.
+ * Ensures that completed background runs appear in chat history on page reload.
+ */
+async function maybePersistAssistantMessage(
+  run: ExecutionRecord
+): Promise<void> {
+  try {
+    const { getMessagesByChatId, saveMessages } = await import(
+      "@/lib/db/queries"
+    );
+    const existingMessages = await getMessagesByChatId({
+      id: run.chatId,
+    }).catch(() => []);
+    const lastMsg = existingMessages.at(-1);
+    if (lastMsg && lastMsg.role === "user") {
+      const isComplete = run.executionState === "COMPLETED";
+      const isStopped = run.executionState === "CANCELLED";
+
+      const stepParts =
+        run.steps.length > 0
+          ? [
+              {
+                input: {
+                  instruction:
+                    run.originalIntent ||
+                    run.currentAction ||
+                    "Execute browser task",
+                },
+                output: {
+                  isStopped,
+                  lastConfirmedAction:
+                    run.lastConfirmedAction || run.currentAction,
+                  output: isStopped
+                    ? "Test execution was stopped by user."
+                    : run.currentAction ||
+                      "Test execution completed successfully.",
+                  stepCount: run.steps.length,
+                  success: isComplete,
+                },
+                state: "output-available",
+                toolCallId: `step-${run.sequence || 1}`,
+                type: "tool-runBrowserStep",
+              },
+            ]
+          : [];
+
+      const evalPart = isComplete
+        ? [
+            {
+              input: {},
+              output: {
+                actual: run.currentAction || "Test completed successfully.",
+                expected: "Test completed",
+                findingId: run.findingId || null,
+                status: run.verdict || "pass",
+                summary: run.currentAction || "Test execution completed.",
+                title:
+                  run.verdict === "pass" ? "Test Passed" : "Test Completed",
+              },
+              state: "output-available",
+              toolCallId: `eval-${run.sessionId || generateUUID()}`,
+              type: "tool-evaluateTestResult",
+            },
+          ]
+        : [];
+
+      await saveMessages({
+        messages: [
+          {
+            attachments: [],
+            chatId: run.chatId,
+            createdAt: new Date(),
+            id: generateUUID(),
+            parts: [
+              {
+                input: { targetUrl: run.targetUrl },
+                output: {
+                  browserSessionId: run.browserSessionId,
+                  sessionId: run.sessionId,
+                  targetUrl: run.targetUrl,
+                },
+                state: "output-available",
+                toolCallId: `start-${run.sessionId || "session"}`,
+                type: "tool-startTestSession",
+              },
+              ...stepParts,
+              ...evalPart,
+              {
+                text: isStopped
+                  ? "Test was stopped by user."
+                  : "Test completed successfully.",
+                type: "text",
+              },
+            ],
+            role: "assistant",
+          },
+        ],
+      }).catch((err) => {
+        console.warn(
+          "[ExecutionTracker] Could not save completed message:",
+          err
+        );
+      });
+    }
+  } catch (err) {
+    console.warn("[ExecutionTracker] maybePersistAssistantMessage error:", err);
+  }
+}
+
+/**
+ * Authoritatively reconciles the execution state against Browser Use Cloud,
+ * DB snapshot, and actual task status.
+ * Eliminates ghost runs, ensures completed cloud tasks are never treated as running.
+ */
+async function reconcileRun(chatId: string): Promise<ExecutionRecord | null> {
+  let run = registry.activeRunsByChat.get(chatId);
+
+  if (!run) {
+    try {
+      const { getTestSessionByChatId } = await import("@/lib/db/queries");
+      const dbSession = await getTestSessionByChatId({ chatId });
+      if (dbSession?.executionSnapshot) {
+        run = restoreRun(dbSession.executionSnapshot as any);
+      }
+    } catch {
+      /* non-fatal */
+    }
+  }
+
+  if (!run) {
+    return null;
+  }
+
+  // If already terminal, ensure all steps are resolved and return
+  if (isIrreversibleExecutionState(run.executionState)) {
+    let changed = false;
+    for (const step of run.steps) {
+      if (step.status === "running") {
+        step.status = "completed";
+        changed = true;
+      }
+    }
+    if (changed) {
+      persistExecutionSnapshot(run).catch(() => {
+        /* non-fatal snapshot update */
+      });
+    }
+    return run;
+  }
+
+  // For non-terminal runs, verify with actual Browser Use Cloud status
+  let client: ReturnType<typeof getBrowserUseClient> | null = null;
+  try {
+    client = getBrowserUseClient();
+  } catch {
+    /* non-fatal */
+  }
+
+  if (client) {
+    // 1. Check if the underlying browser session is still active
+    if (run.browserSessionId) {
+      try {
+        const cloudSession = await client.sessions
+          .get(run.browserSessionId)
+          .catch(() => null);
+
+        const isSessionDead =
+          cloudSession?.status !== "active" ||
+          Boolean(cloudSession?.finishedAt);
+
+        if (isSessionDead) {
+          console.log(
+            `[ExecutionTracker] Reconciling: cloud session ${run.browserSessionId} is dead. Marking execution COMPLETED.`
+          );
+          for (const s of run.steps) {
+            if (s.status === "running") {
+              s.status = "completed";
+            }
+          }
+          run.executionState =
+            run.isCancelRequested || run.executionState === "CANCELLING"
+              ? "CANCELLED"
+              : "COMPLETED";
+          run.completedAt =
+            cloudSession?.finishedAt || new Date().toISOString();
+          run.lastActivityAt = run.completedAt;
+          run.currentAction =
+            run.executionState === "CANCELLED"
+              ? "Test stopped by user"
+              : "Test execution completed";
+          run.sequence += 1;
+
+          await persistExecutionSnapshot(run);
+
+          if (run.sessionId) {
+            const { updateTestSessionStatus } = await import(
+              "@/lib/db/queries"
+            );
+            await updateTestSessionStatus({
+              force: true,
+              id: run.sessionId,
+              status:
+                run.executionState === "CANCELLED" ? "cancelled" : "completed",
+            }).catch(() => null);
+          }
+
+          await maybePersistAssistantMessage(run);
+          return run;
+        }
+      } catch (err) {
+        console.warn(
+          `[ExecutionTracker] Error querying cloud session ${run.browserSessionId}:`,
+          err
+        );
+      }
+    }
+
+    // 2. Check active task or query latest task on session
+    let targetTaskId = run.activeTaskId;
+    if (!targetTaskId && run.browserSessionId) {
+      try {
+        const taskList = await client.tasks
+          .list({ sessionId: run.browserSessionId })
+          .catch(() => null);
+        const items = taskList?.items ?? (taskList as any)?.tasks ?? [];
+        if (Array.isArray(items) && items.length > 0) {
+          const sorted = [...items].sort(
+            (a: any, b: any) =>
+              new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          targetTaskId = sorted[0]?.id;
+          if (targetTaskId) {
+            run.activeTaskId = targetTaskId;
+          }
+        }
+      } catch (err) {
+        console.warn(
+          "[ExecutionTracker] Error listing session tasks for reconcile:",
+          err
+        );
+      }
+    }
+
+    if (targetTaskId) {
+      try {
+        const task = await client.tasks.get(targetTaskId).catch(() => null);
+        if (task) {
+          if (task.status === "finished") {
+            console.log(
+              `[ExecutionTracker] Reconciling: cloud task ${targetTaskId} is finished. Updating state to COMPLETED.`
+            );
+            if (
+              task.steps &&
+              Array.isArray(task.steps) &&
+              task.steps.length > 0
+            ) {
+              run.steps = task.steps.map((st: any, idx: number) => ({
+                action:
+                  (typeof st.nextGoal === "string" && st.nextGoal.trim()) ||
+                  (typeof st.evaluationPreviousGoal === "string" &&
+                    st.evaluationPreviousGoal.trim()) ||
+                  (typeof st.output === "string" && st.output.trim()) ||
+                  `Step ${idx + 1}`,
+                number: idx + 1,
+                status: "completed" as const,
+                timestamp: st.createdAt || run.lastActivityAt,
+                url: st.url ?? st.currentUrl ?? undefined,
+              }));
+              run.currentStep = run.steps.length;
+            } else {
+              for (const s of run.steps) {
+                if (s.status === "running") {
+                  s.status = "completed";
+                }
+              }
+            }
+
+            run.executionState = "COMPLETED";
+            run.completedAt = task.finishedAt || new Date().toISOString();
+            run.lastActivityAt = run.completedAt;
+            run.currentAction =
+              typeof task.output === "string" && task.output.trim()
+                ? "Test execution completed"
+                : "Test completed";
+            run.sequence += 1;
+
+            await persistExecutionSnapshot(run);
+
+            if (run.sessionId) {
+              const { updateTestSessionStatus } = await import(
+                "@/lib/db/queries"
+              );
+              await updateTestSessionStatus({
+                force: true,
+                id: run.sessionId,
+                status: "completed",
+              }).catch(() => null);
+            }
+
+            await maybePersistAssistantMessage(run);
+            return run;
+          }
+
+          if (task.status === "stopped") {
+            console.log(
+              `[ExecutionTracker] Reconciling: cloud task ${targetTaskId} is stopped. Updating state to CANCELLED.`
+            );
+            for (const s of run.steps) {
+              if (s.status === "running") {
+                s.status = "completed";
+              }
+            }
+            run.executionState = "CANCELLED";
+            run.completedAt = task.finishedAt || new Date().toISOString();
+            run.lastActivityAt = run.completedAt;
+            run.currentAction = "Test stopped by user";
+            run.sequence += 1;
+
+            await persistExecutionSnapshot(run);
+
+            if (run.sessionId) {
+              const { updateTestSessionStatus } = await import(
+                "@/lib/db/queries"
+              );
+              await updateTestSessionStatus({
+                force: true,
+                id: run.sessionId,
+                status: "cancelled",
+              }).catch(() => null);
+            }
+
+            await maybePersistAssistantMessage(run);
+            return run;
+          }
+
+          if (task.status === "failed") {
+            console.log(
+              `[ExecutionTracker] Reconciling: cloud task ${targetTaskId} is failed. Updating state to FAILED.`
+            );
+            if (run.steps.length > 0) {
+              const last = run.steps.at(-1);
+              if (last && last.status === "running") {
+                last.status = "failed";
+              }
+            }
+            run.executionState = "FAILED";
+            run.completedAt = task.finishedAt || new Date().toISOString();
+            run.lastActivityAt = run.completedAt;
+            run.currentAction = "Test execution failed";
+            run.sequence += 1;
+
+            await persistExecutionSnapshot(run);
+
+            if (run.sessionId) {
+              const { updateTestSessionStatus } = await import(
+                "@/lib/db/queries"
+              );
+              await updateTestSessionStatus({
+                force: true,
+                id: run.sessionId,
+                status: "error",
+              }).catch(() => null);
+            }
+            return run;
+          }
+
+          if (task.status === "started" || task.status === "created") {
+            // Task is actually in flight on the cloud!
+            if (
+              task.steps &&
+              Array.isArray(task.steps) &&
+              task.steps.length > 0
+            ) {
+              run.steps = task.steps.map((st: any, idx: number) => ({
+                action:
+                  (typeof st.nextGoal === "string" && st.nextGoal.trim()) ||
+                  (typeof st.evaluationPreviousGoal === "string" &&
+                    st.evaluationPreviousGoal.trim()) ||
+                  (typeof st.output === "string" && st.output.trim()) ||
+                  `Step ${idx + 1}`,
+                number: idx + 1,
+                status: (idx === task.steps.length - 1
+                  ? "running"
+                  : "completed") as "running" | "completed",
+                timestamp: st.createdAt || run.lastActivityAt,
+                url: st.url ?? st.currentUrl ?? undefined,
+              }));
+              run.currentStep = run.steps.length;
+              const lastGoal = task.steps.at(-1)?.nextGoal;
+              if (lastGoal && typeof lastGoal === "string") {
+                run.currentAction = lastGoal;
+              }
+            }
+            run.executionState = "RUNNING";
+            run.lastActivityAt = new Date().toISOString();
+            await persistExecutionSnapshot(run);
+            return run;
+          }
+        }
+      } catch (err) {
+        console.warn(
+          `[ExecutionTracker] Error getting task ${targetTaskId}:`,
+          err
+        );
+      }
+    }
+  }
+
+  // 3. Stale activity check: if a non-terminal run has had no activity for > 2 minutes
+  // and no task is in-flight on cloud, it must not remain active
+  const elapsedSinceActivity =
+    Date.now() - new Date(run.lastActivityAt || run.startedAt).getTime();
+  if (elapsedSinceActivity > 120_000) {
+    console.log(
+      `[ExecutionTracker] Run for chat ${chatId} has been inactive for ${Math.round(elapsedSinceActivity / 1000)}s. Marking COMPLETED.`
+    );
+    for (const s of run.steps) {
+      if (s.status === "running") {
+        s.status = "completed";
+      }
+    }
+    run.executionState = "COMPLETED";
+    run.completedAt = new Date().toISOString();
+    run.lastActivityAt = run.completedAt;
+    run.currentAction = "Test execution completed";
+    run.sequence += 1;
+
+    await persistExecutionSnapshot(run);
+
+    if (run.sessionId) {
+      const { updateTestSessionStatus } = await import("@/lib/db/queries");
+      await updateTestSessionStatus({
+        force: true,
+        id: run.sessionId,
+        status: "completed",
+      }).catch(() => null);
+    }
+
+    await maybePersistAssistantMessage(run);
+  }
+
+  return run;
+}
+
+/**
  * Restores an execution record into memory (e.g. on server reload or reconnection).
  */
 function restoreRun(record: ExecutionRecord): ExecutionRecord {
@@ -833,6 +1309,7 @@ export const ExecutionTracker = {
   getDownloads,
   getRunById,
   isCancelRequested,
+  reconcileRun,
   recordFinalizing,
   recordWaiting,
   registerAbortController,

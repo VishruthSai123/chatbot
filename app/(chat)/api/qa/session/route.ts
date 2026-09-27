@@ -162,26 +162,14 @@ export async function GET(request: Request) {
       `[BrowserSession] Status check: id=${testSession.id}, browserSessionId=${testSession.browserSessionId}, status=${currentStatus}, isEnded=${isEnded}, liveUrl=${Boolean(liveUrl)}`
     );
 
-    // Retrieve active or last execution from tracker
-    let execution = ExecutionTracker.getActiveRun(chatId);
-
-    // If tracker in-memory is empty (e.g. server reboot or new tab), restore from DB snapshot
-    if (!execution && testSession?.executionSnapshot) {
-      try {
-        execution = ExecutionTracker.restoreRun(
-          testSession.executionSnapshot as any
-        );
-      } catch (err) {
-        console.warn(
-          "[QA Session API] Failed to restore execution snapshot:",
-          err
-        );
-      }
-    }
+    // Authoritatively reconcile active/recent run with Browser Use Cloud and DB snapshot
+    let execution = await ExecutionTracker.reconcileRun(chatId);
 
     if (execution) {
       if (
-        (testSession.status === "completed" || isEnded) &&
+        (currentStatus === "completed" ||
+          testSession.status === "completed" ||
+          isEnded) &&
         execution.executionState !== "COMPLETED" &&
         execution.executionState !== "FAILED"
       ) {
@@ -189,8 +177,13 @@ export async function GET(request: Request) {
         execution.completedAt =
           execution.completedAt || testSession.updatedAt.toISOString();
         execution.currentAction = "Test execution completed";
+        for (const s of execution.steps) {
+          if (s.status === "running") {
+            s.status = "completed";
+          }
+        }
       } else if (
-        testSession.status === "cancelled" &&
+        (currentStatus === "cancelled" || testSession.status === "cancelled") &&
         execution.executionState !== "CANCELLED" &&
         execution.executionState !== "RESUMING"
       ) {
@@ -199,6 +192,11 @@ export async function GET(request: Request) {
         execution.currentAction = "Test stopped by user";
         execution.completedAt =
           execution.completedAt || testSession.updatedAt.toISOString();
+        for (const s of execution.steps) {
+          if (s.status === "running") {
+            s.status = "completed";
+          }
+        }
       }
     }
 

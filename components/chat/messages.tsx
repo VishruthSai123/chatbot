@@ -1,6 +1,6 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { ArrowDownIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useMessages } from "@/hooks/use-messages";
 import type { Vote } from "@/lib/db/schema";
 import { isTerminalExecutionState } from "@/lib/qa/execution-types";
@@ -33,6 +33,7 @@ function buildSyntheticQAParts(execution: any) {
   if (!execution) {
     return [];
   }
+  const isTerminal = isTerminalExecutionState(execution.executionState);
   const parts: any[] = [];
 
   // 1. Session start part
@@ -50,44 +51,44 @@ function buildSyntheticQAParts(execution: any) {
     });
   }
 
-  // 2. High-level Browser Steps
+  // 2. High-level Browser Step
+  // In QA testing, runBrowserStep represents the task instruction, NOT every individual sub-step.
   const steps = execution.steps || [];
-  if (steps.length > 0) {
-    for (const step of steps) {
-      const isRunning = step.status === "running";
-      parts.push({
-        input: { instruction: step.action },
-        output: isRunning
-          ? undefined
-          : {
-              error: step.error,
-              lastConfirmedAction: step.action,
-              stepCount: step.number,
-              success: step.status !== "failed",
-            },
-        state: isRunning ? "input-streaming" : "output-available",
-        toolCallId: `step-${step.number}`,
-        type: "tool-runBrowserStep",
-      });
-    }
-  } else if (
-    execution.executionState === "RUNNING" ||
-    execution.executionState === "STARTING" ||
-    execution.executionState === "WAITING" ||
-    execution.executionState === "RESUMING" ||
-    execution.executionState === "CANCELLING"
-  ) {
-    parts.push({
-      input: {
-        instruction:
-          execution.currentAction || "Initializing test in browser...",
-      },
-      output: undefined,
-      state: "input-streaming",
-      toolCallId: "step-initial",
-      type: "tool-runBrowserStep",
-    });
-  }
+  const isStepRunning =
+    !isTerminal &&
+    (execution.executionState === "RUNNING" ||
+      execution.executionState === "STARTING" ||
+      execution.executionState === "WAITING" ||
+      execution.executionState === "RESUMING");
+
+  const instructionText =
+    execution.originalIntent ||
+    execution.currentAction ||
+    (steps.length > 0 ? steps[0]?.action : null) ||
+    "Execute browser task";
+
+  const lastStepAction =
+    steps.length > 0 ? steps.at(-1)?.action : execution.currentAction;
+
+  parts.push({
+    input: { instruction: instructionText },
+    output: isStepRunning
+      ? undefined
+      : {
+          error: execution.error,
+          isStopped: execution.executionState === "CANCELLED",
+          lastConfirmedAction: execution.lastConfirmedAction || lastStepAction,
+          output:
+            execution.executionState === "CANCELLED"
+              ? "Test execution was stopped by user."
+              : execution.currentAction || "Task completed",
+          stepCount: steps.length || 1,
+          success: execution.executionState === "COMPLETED",
+        },
+    state: isStepRunning ? "input-streaming" : "output-available",
+    toolCallId: `step-${execution.sessionId || "main"}`,
+    type: "tool-runBrowserStep",
+  });
 
   // 3. Evaluation step
   if (
@@ -100,9 +101,15 @@ function buildSyntheticQAParts(execution: any) {
       input: {},
       output: isCompleted
         ? {
+            actual: execution.currentAction || "Verification successful",
+            expected: "Test completed",
             findingId: execution.findingId,
             status: execution.verdict || "pass",
-            title: execution.currentAction || "Test Completed",
+            summary: execution.currentAction || "Test execution completed.",
+            title:
+              execution.verdict === "pass"
+                ? "Test Passed"
+                : execution.currentAction || "Test Completed",
           }
         : undefined,
       state: isCompleted ? "output-available" : "input-streaming",
@@ -152,17 +159,6 @@ function PureMessages({
     }
   }, [chatId, reset]);
 
-  const [hydratedRunId, setHydratedRunId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (
-      activeExecution?.runId &&
-      !isTerminalExecutionState(activeExecution.executionState)
-    ) {
-      setHydratedRunId(activeExecution.runId);
-    }
-  }, [activeExecution?.runId, activeExecution?.executionState]);
-
   const lastMessage = messages.at(-1);
   const isLastMessageAssistantWithTools =
     lastMessage?.role === "assistant" &&
@@ -174,12 +170,28 @@ function PureMessages({
           p.type === "tool-evaluateTestResult"
       ));
 
-  const shouldRenderHydratedExecution =
-    Boolean(
-      hydratedRunId &&
-        activeExecution &&
-        activeExecution.runId === hydratedRunId
-    ) && !isLastMessageAssistantWithTools;
+  const isExecutionTerminal = isTerminalExecutionState(
+    activeExecution?.executionState
+  );
+
+  // If the chat messages already contain an assistant message with tools or results,
+  // do not render a duplicate synthetic hydrated block!
+  const hasExistingAssistantQA = messages.some(
+    (m) =>
+      m.role === "assistant" &&
+      m.parts?.some(
+        (p) =>
+          p.type === "tool-startTestSession" ||
+          p.type === "tool-runBrowserStep" ||
+          p.type === "tool-evaluateTestResult"
+      )
+  );
+
+  const shouldRenderHydratedExecution = Boolean(
+    activeExecution &&
+      (!isExecutionTerminal || !hasExistingAssistantQA) &&
+      !isLastMessageAssistantWithTools
+  );
 
   const syntheticQAParts = useMemo(() => {
     if (!shouldRenderHydratedExecution || !activeExecution) {

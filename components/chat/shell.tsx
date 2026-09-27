@@ -95,19 +95,17 @@ export function ChatShell() {
     const s = sessionData?.session;
     const exec = sessionData?.execution;
 
-    if (s?.liveUrl && !s.isEnded && hasRestoredSessionRef.current !== s.id) {
+    if (s?.id && hasRestoredSessionRef.current !== s.id) {
       hasRestoredSessionRef.current = s.id;
       setArtifact((prev) => {
-        if (prev.isVisible) {
-          return prev;
-        }
+        const shouldBeVisible = Boolean(s.liveUrl && !s.isEnded);
         return {
           ...prev,
           documentId: s.id,
-          isVisible: true,
+          isVisible: shouldBeVisible ? true : prev.isVisible,
           kind: "browser",
-          status: s.status === "active" ? "streaming" : "idle",
-          title: s.targetUrl || "Live Browser",
+          status: s.status === "active" && !s.isEnded ? "streaming" : "idle",
+          title: s.targetUrl || prev.title || "Live Browser",
         };
       });
     }
