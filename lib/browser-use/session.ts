@@ -131,17 +131,13 @@ export async function getOrCreateBrowserSession({
     }
   }
 
-  // Standard canonical browser dimensions: 1440x880 (~1.636 ratio)
-  // Perfectly fits desktop QA testing and matches right-panel aspect ratio.
-  const DEFAULT_BROWSER_WIDTH = 1440;
-  const DEFAULT_BROWSER_HEIGHT = 880;
-
-  let finalWidth = browserScreenWidth
-    ? Math.round(browserScreenWidth)
-    : DEFAULT_BROWSER_WIDTH;
+  // Adaptive screen sizing:
+  // Dynamically use the pre-computed dimensions matching the user's screen ratio.
+  // Fall back to 1100x1440 (~1:1.3) to prevent letterboxing in the QA preview.
+  let finalWidth = browserScreenWidth ? Math.round(browserScreenWidth) : 1100;
   let finalHeight = browserScreenHeight
     ? Math.round(browserScreenHeight)
-    : Math.round(finalWidth * (DEFAULT_BROWSER_HEIGHT / DEFAULT_BROWSER_WIDTH));
+    : Math.round(finalWidth * (1440 / 1100));
 
   // Clamp within safe browser limits (min 360px, max 3840px / 2160px)
   finalWidth = Math.min(Math.max(finalWidth, 360), 3840);
