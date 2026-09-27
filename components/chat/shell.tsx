@@ -19,6 +19,7 @@ import {
   useArtifactMetadataSelector,
   useArtifactSelector,
 } from "@/hooks/use-artifact";
+import { isTerminalExecutionState } from "@/lib/qa/execution-types";
 import type { Attachment, ChatMessage } from "@/lib/types";
 import { cn, fetcher } from "@/lib/utils";
 import { Artifact } from "./artifact";
@@ -62,7 +63,8 @@ export function ChatShell() {
   const { setArtifact, setMetadata } = useArtifactActions();
 
   // Restore active browser session and execution state on page load/refresh/reconnect
-  const { data: sessionData } = useSWR<{
+  const { data: sessionData, mutate: mutateSession } = useSWR<{
+    finding?: any;
     session: {
       id: string;
       browserSessionId: string;
@@ -73,6 +75,17 @@ export function ChatShell() {
     } | null;
     execution: any;
   }>(chatId ? `/api/qa/session?chatId=${chatId}` : null, fetcher, {
+    refreshInterval: (latestData) => {
+      const execState = latestData?.execution?.executionState;
+      const isRemoteActive =
+        execState === "STARTING" ||
+        execState === "RUNNING" ||
+        execState === "WAITING" ||
+        execState === "FINALIZING" ||
+        execState === "RESUMING" ||
+        execState === "CANCELLING";
+      return isRemoteActive ? 1500 : 0;
+    },
     revalidateOnFocus: true,
     revalidateOnReconnect: true,
   });
@@ -148,12 +161,20 @@ export function ChatShell() {
           targetUrl: s.targetUrl || safePrev.targetUrl,
           ...(exec
             ? {
+                cancelledAt:
+                  exec.executionState === "CANCELLED"
+                    ? exec.completedAt ||
+                      safePrev.cancelledAt ||
+                      new Date().toISOString()
+                    : safePrev.cancelledAt,
+                completedAt: exec.completedAt || safePrev.completedAt,
                 currentAction: exec.currentAction || safePrev.currentAction,
                 executionState: exec.executionState || safePrev.executionState,
                 findingId: exec.findingId || safePrev.findingId,
                 recentSteps: exec.steps || safePrev.recentSteps,
                 runId: exec.runId || safePrev.runId,
                 sequence: exec.sequence || safePrev.sequence,
+                startedAt: exec.startedAt || safePrev.startedAt,
                 verdict: exec.verdict || safePrev.verdict,
               }
             : {}),
@@ -210,6 +231,38 @@ export function ChatShell() {
     setInput("");
   }, [editingMessage, input, regenerate, setInput, setMessages]);
 
+  const isExecutionActive = Boolean(
+    sessionData?.execution &&
+      !isTerminalExecutionState(sessionData.execution.executionState)
+  );
+
+  const handleStopExecution = useCallback(async () => {
+    if (!chatId) {
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent("qa:cancelling-requested", {
+        detail: { chatId },
+      })
+    );
+    try {
+      await fetch("/api/qa/session", {
+        body: JSON.stringify({ action: "stop", chatId }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+    } catch (err) {
+      console.warn("[ChatShell] Error stopping execution:", err);
+    }
+    mutateSession();
+    window.dispatchEvent(
+      new CustomEvent("qa:stop-requested", {
+        detail: { chatId },
+      })
+    );
+    stop();
+  }, [chatId, mutateSession, stop]);
+
   const handleActivateGateway = useCallback(() => {
     window.open(
       "https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fai%3Fmodal%3Dadd-credit-card",
@@ -241,6 +294,7 @@ export function ChatShell() {
 
           <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background md:rounded-tl-[12px] md:border-t md:border-l md:border-border/40">
             <Messages
+              activeExecution={sessionData?.execution}
               addToolApprovalResponse={addToolApprovalResponse}
               chatId={chatId}
               isArtifactVisible={isArtifactVisible}
@@ -248,8 +302,10 @@ export function ChatShell() {
               isReadonly={isReadonly}
               messages={messages}
               onEditMessage={handleEditMessage}
+              onStopExecution={handleStopExecution}
               regenerate={regenerate}
               selectedModelId={currentModelId}
+              sessionFinding={sessionData?.finding}
               setMessages={setMessages}
               status={status}
               votes={votes}
@@ -262,10 +318,12 @@ export function ChatShell() {
                   chatId={chatId}
                   editingMessage={editingMessage}
                   input={input}
+                  isExecutionActive={isExecutionActive}
                   isLoading={isLoading}
                   messages={messages}
                   onCancelEdit={handleCancelEdit}
                   onModelChange={setCurrentModelId}
+                  onStopExecution={handleStopExecution}
                   selectedModelId={currentModelId}
                   selectedVisibilityType={visibilityType}
                   sendMessage={

@@ -89,6 +89,8 @@ function PureMultimodalInput({
   editingMessage,
   onCancelEdit,
   isLoading,
+  isExecutionActive,
+  onStopExecution,
 }: {
   chatId: string;
   input: string;
@@ -109,6 +111,8 @@ function PureMultimodalInput({
   editingMessage?: ChatMessage | null;
   onCancelEdit?: () => void;
   isLoading?: boolean;
+  isExecutionActive?: boolean;
+  onStopExecution?: () => void;
 }) {
   const router = useRouter();
   const { setMetadata } = useArtifact();
@@ -523,6 +527,7 @@ function PureMultimodalInput({
     }
 
     // 3. Notify all components that cancellation is confirmed on backend
+    onStopExecution?.();
     window.dispatchEvent(
       new CustomEvent("qa:stop-requested", {
         detail: { chatId },
@@ -564,7 +569,7 @@ function PureMultimodalInput({
       }
       return prev;
     });
-  }, [chatId, setMessages, setMetadata, stop]);
+  }, [chatId, onStopExecution, setMessages, setMetadata, stop]);
 
   useEffect(() => {
     const handleRemoteCancelling = (e: Event) => {
@@ -735,7 +740,9 @@ function PureMultimodalInput({
             />
           </PromptInputTools>
 
-          {status === "submitted" || status === "streaming" ? (
+          {status === "submitted" ||
+          status === "streaming" ||
+          isExecutionActive ? (
             <StopButton setMessages={setMessages} stop={handleCustomStop} />
           ) : (
             <PromptInputSubmit
@@ -766,6 +773,9 @@ export const MultimodalInput = memo(
       return false;
     }
     if (prevProps.status !== nextProps.status) {
+      return false;
+    }
+    if (prevProps.isExecutionActive !== nextProps.isExecutionActive) {
       return false;
     }
     if (!equal(prevProps.attachments, nextProps.attachments)) {

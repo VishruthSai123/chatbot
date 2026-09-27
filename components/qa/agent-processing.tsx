@@ -11,8 +11,9 @@ import {
   MousePointer2,
   Search,
   Sparkles,
+  Square,
 } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -24,9 +25,11 @@ import { cn } from "@/lib/utils";
 import { Shimmer } from "../ai-elements/shimmer";
 
 export interface AgentProcessingProps {
+  chatId?: string;
   className?: string;
   isLoading?: boolean;
   messageId: string;
+  onStop?: () => void;
   parts: any[];
 }
 
@@ -193,9 +196,11 @@ function SparkleMiniIcon({ className }: { className?: string }) {
 
 export const AgentProcessing = memo(
   ({
+    chatId,
     className,
     isLoading = false,
     messageId: _messageId,
+    onStop,
     parts,
   }: AgentProcessingProps) => {
     const { metadata } = useArtifact();
@@ -205,6 +210,43 @@ export const AgentProcessing = memo(
       null
     );
     const startTimeRef = useRef<number | null>(null);
+
+    const handleStop = useCallback(
+      async (e?: React.MouseEvent) => {
+        e?.preventDefault();
+        e?.stopPropagation();
+        if (onStop) {
+          onStop();
+          return;
+        }
+        if (!chatId) {
+          return;
+        }
+
+        window.dispatchEvent(
+          new CustomEvent("qa:cancelling-requested", {
+            detail: { chatId },
+          })
+        );
+
+        try {
+          await fetch("/api/qa/session", {
+            body: JSON.stringify({ action: "stop", chatId }),
+            headers: { "Content-Type": "application/json" },
+            method: "POST",
+          });
+        } catch (err) {
+          console.warn("[AgentProcessing] Error stopping session:", err);
+        }
+
+        window.dispatchEvent(
+          new CustomEvent("qa:stop-requested", {
+            detail: { chatId },
+          })
+        );
+      },
+      [chatId, onStop]
+    );
 
     // Identify tool parts from the message
     const startTestSessionPart = parts.find(
@@ -349,7 +391,16 @@ export const AgentProcessing = memo(
 
       if (isAnyRunning) {
         if (startTimeRef.current === null) {
-          startTimeRef.current = Date.now();
+          const runStartedAt = metadata?.startedAt
+            ? new Date(metadata.startedAt).getTime()
+            : Date.now();
+          startTimeRef.current =
+            !Number.isNaN(runStartedAt) && runStartedAt > 0
+              ? runStartedAt
+              : Date.now();
+          setElapsedSeconds(
+            Math.max(1, Math.floor((Date.now() - startTimeRef.current) / 1000))
+          );
         }
         interval = setInterval(() => {
           if (startTimeRef.current) {
@@ -376,7 +427,7 @@ export const AgentProcessing = memo(
           clearInterval(interval);
         }
       };
-    }, [isAnyRunning]);
+    }, [isAnyRunning, metadata?.startedAt]);
 
     // Build Lightweight Action Items
     const actions: ActionItem[] = useMemo(() => {
@@ -719,26 +770,41 @@ export const AgentProcessing = memo(
         onOpenChange={setIsOpen}
         open={isOpen && validActions.length > 0}
       >
-        {/* Subtle, premium header: ✦ Working for 13s ˅ */}
-        <CollapsibleTrigger
-          className={cn(
-            "group inline-flex h-[calc(13px*1.65)] items-center gap-1.5 text-xs text-muted-foreground/75 transition-colors select-none",
-            validActions.length > 0
-              ? "hover:text-foreground cursor-pointer"
-              : "cursor-default pointer-events-none"
+        {/* Subtle, premium header: ✦ Working for 13s ˅   [■ Stop] */}
+        <div className="flex items-center justify-between gap-2">
+          <CollapsibleTrigger
+            className={cn(
+              "group inline-flex h-[calc(13px*1.65)] items-center gap-1.5 text-xs text-muted-foreground/75 transition-colors select-none",
+              validActions.length > 0
+                ? "hover:text-foreground cursor-pointer"
+                : "cursor-default pointer-events-none"
+            )}
+          >
+            <SparkleMiniIcon className="size-3 shrink-0 text-muted-foreground/60 transition-colors group-hover:text-foreground/80" />
+            <span className="font-normal leading-none">{durationDisplay}</span>
+            {validActions.length > 0 && (
+              <ChevronDownIcon
+                className={cn(
+                  "size-3 shrink-0 text-muted-foreground/50 transition-transform duration-200 group-hover:text-foreground",
+                  isOpen ? "rotate-180" : "rotate-0"
+                )}
+              />
+            )}
+          </CollapsibleTrigger>
+
+          {Boolean(isAnyRunning) && (
+            <button
+              className="inline-flex items-center gap-1 rounded border border-border/50 bg-background/80 px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground select-none cursor-pointer"
+              data-testid="agent-processing-stop-button"
+              onClick={handleStop}
+              title="Stop test execution"
+              type="button"
+            >
+              <Square className="size-2.5 fill-current" />
+              <span>Stop</span>
+            </button>
           )}
-        >
-          <SparkleMiniIcon className="size-3 shrink-0 text-muted-foreground/60 transition-colors group-hover:text-foreground/80" />
-          <span className="font-normal leading-none">{durationDisplay}</span>
-          {validActions.length > 0 && (
-            <ChevronDownIcon
-              className={cn(
-                "size-3 shrink-0 text-muted-foreground/50 transition-transform duration-200 group-hover:text-foreground",
-                isOpen ? "rotate-180" : "rotate-0"
-              )}
-            />
-          )}
-        </CollapsibleTrigger>
+        </div>
 
         {/* Live / completed description */}
         {activeDescription && (

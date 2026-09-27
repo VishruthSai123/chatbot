@@ -179,18 +179,27 @@ export async function GET(request: Request) {
       }
     }
 
-    if (
-      testSession.status === "cancelled" &&
-      execution &&
-      execution.executionState !== "RUNNING" &&
-      execution.executionState !== "RESUMING" &&
-      execution.executionState !== "STARTING" &&
-      execution.executionState !== "FINALIZING" &&
-      execution.executionState !== "COMPLETED"
-    ) {
-      execution.executionState = "CANCELLED";
-      execution.isCancelRequested = true;
-      execution.currentAction = "Test stopped by user";
+    if (execution) {
+      if (
+        (testSession.status === "completed" || isEnded) &&
+        execution.executionState !== "COMPLETED" &&
+        execution.executionState !== "FAILED"
+      ) {
+        execution.executionState = "COMPLETED";
+        execution.completedAt =
+          execution.completedAt || testSession.updatedAt.toISOString();
+        execution.currentAction = "Test execution completed";
+      } else if (
+        testSession.status === "cancelled" &&
+        execution.executionState !== "CANCELLED" &&
+        execution.executionState !== "RESUMING"
+      ) {
+        execution.executionState = "CANCELLED";
+        execution.isCancelRequested = true;
+        execution.currentAction = "Test stopped by user";
+        execution.completedAt =
+          execution.completedAt || testSession.updatedAt.toISOString();
+      }
     }
 
     const sessionFindings = await getQAFindingsBySessionId({

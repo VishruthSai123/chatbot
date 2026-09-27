@@ -284,6 +284,10 @@ function updateStep({
     run.steps.push(stepData);
   }
 
+  persistExecutionSnapshot(run).catch(() => {
+    /* non-fatal */
+  });
+
   return run;
 }
 

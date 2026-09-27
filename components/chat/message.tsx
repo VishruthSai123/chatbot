@@ -84,14 +84,18 @@ function ToolApprovalActions({
   );
 }
 
-const QAToolGroup = memo(function PureQAToolGroup({
+export const QAToolGroup = memo(function PureQAToolGroup({
   messageId,
   qaParts,
   isLoading,
+  chatId,
+  onStop,
 }: {
   messageId: string;
   qaParts: any[];
   isLoading: boolean;
+  chatId?: string;
+  onStop?: () => void;
 }) {
   const metadataFinding = useArtifactMetadataSelector((meta) => meta?.finding);
   const metadataExecState = useArtifactMetadataSelector(
@@ -132,8 +136,10 @@ const QAToolGroup = memo(function PureQAToolGroup({
   return (
     <div className="w-full space-y-2.5" key={`qa-group-${messageId}`}>
       <AgentProcessing
+        chatId={chatId}
         isLoading={isLoading}
         messageId={messageId}
+        onStop={onStop}
         parts={qaParts}
       />
 
@@ -448,6 +454,7 @@ const PurePreviewMessage = ({
         qaBlockRendered = true;
         return (
           <QAToolGroup
+            chatId={chatId}
             isLoading={isLoading}
             key={`qa-group-${message.id}`}
             messageId={message.id}
