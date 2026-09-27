@@ -454,6 +454,41 @@ function PureMultimodalInput({
     ]
   );
 
+  const handleCustomStop = useCallback(() => {
+    stop();
+    setMessages((prev) => prev);
+    if (chatId) {
+      fetch("/api/qa/session", {
+        body: JSON.stringify({ action: "stop", chatId }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }).catch(() => null);
+    }
+  }, [chatId, setMessages, stop]);
+
+  useEffect(() => {
+    const handleResume = (e: Event) => {
+      const customEvent = e as CustomEvent<{ chatId: string }>;
+      if (
+        customEvent.detail?.chatId === chatId &&
+        typeof sendMessage === "function"
+      ) {
+        (sendMessage as any)({
+          parts: [
+            {
+              text: "Continue testing from where you stopped",
+              type: "text",
+            },
+          ],
+          role: "user",
+        });
+      }
+    };
+    window.addEventListener("qa:resume-requested", handleResume);
+    return () =>
+      window.removeEventListener("qa:resume-requested", handleResume);
+  }, [chatId, sendMessage]);
+
   return (
     <div className={cn("relative flex w-full flex-col gap-4", className)}>
       {editingMessage && onCancelEdit ? (
@@ -556,8 +591,8 @@ function PureMultimodalInput({
             />
           </PromptInputTools>
 
-          {status === "submitted" ? (
-            <StopButton setMessages={setMessages} stop={stop} />
+          {status === "submitted" || status === "streaming" ? (
+            <StopButton setMessages={setMessages} stop={handleCustomStop} />
           ) : (
             <PromptInputSubmit
               className={cn(

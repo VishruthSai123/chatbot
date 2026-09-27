@@ -35,12 +35,14 @@ export interface ActiveBrowserSession {
 
 export interface RunBrowserTaskOptions {
   instruction: string;
+  isCancelled?: () => boolean;
   onStep?: (step: TaskStepView) => void | Promise<void>;
   onTaskId?: (taskId: string) => void;
   sessionId: string;
 }
 
 export interface RunBrowserTaskResult {
+  isStopped?: boolean;
   isSuccess: boolean | null;
   output: string | null;
   steps: TaskStepView[];
@@ -188,12 +190,14 @@ export async function getOrCreateBrowserSession({
 
 /**
  * Executes a task on the specified browser session, yielding each step as it occurs.
+ * Supports real-time cancellation check to stop cloud task promptly without killing the browser.
  */
 export async function runBrowserTask({
   sessionId,
   instruction,
   onStep,
   onTaskId,
+  isCancelled,
 }: RunBrowserTaskOptions): Promise<RunBrowserTaskResult> {
   const client = getBrowserUseClient();
   const taskRun = client.run(instruction, {
@@ -212,6 +216,28 @@ export async function runBrowserTask({
   try {
     for await (const step of taskRun) {
       checkTaskId();
+
+      // Check if cancellation was requested while running
+      if (isCancelled?.()) {
+        console.log(
+          `[BrowserUse] Cancellation detected in runBrowserTask. Stopping active task ${taskRun.taskId}...`
+        );
+        if (taskRun.taskId) {
+          try {
+            await client.tasks.stop(taskRun.taskId);
+          } catch {
+            /* ignore if already stopped */
+          }
+        }
+        return {
+          isStopped: true,
+          isSuccess: false,
+          output: "Task stopped by user",
+          steps,
+          taskId: recordedTaskId || taskRun.taskId,
+        };
+      }
+
       steps.push(step);
       if (onStep) {
         try {
@@ -220,12 +246,41 @@ export async function runBrowserTask({
           console.error("[BrowserUse] Error in onStep handler:", err);
         }
       }
+
+      if (isCancelled?.()) {
+        if (taskRun.taskId) {
+          try {
+            await client.tasks.stop(taskRun.taskId);
+          } catch {
+            /* non-fatal */
+          }
+        }
+        return {
+          isStopped: true,
+          isSuccess: false,
+          output: "Task stopped by user",
+          steps,
+          taskId: recordedTaskId || taskRun.taskId,
+        };
+      }
     }
 
     checkTaskId();
+
+    if (isCancelled?.()) {
+      return {
+        isStopped: true,
+        isSuccess: false,
+        output: "Task stopped by user",
+        steps,
+        taskId: recordedTaskId || taskRun.taskId,
+      };
+    }
+
     const result = await taskRun;
 
     return {
+      isStopped: false,
       isSuccess: result.isSuccess ?? null,
       output:
         typeof result.output === "string"
@@ -235,6 +290,16 @@ export async function runBrowserTask({
       taskId: recordedTaskId || taskRun.taskId,
     };
   } catch (error) {
+    if (isCancelled?.()) {
+      return {
+        isStopped: true,
+        isSuccess: false,
+        output: "Task stopped by user",
+        steps,
+        taskId: recordedTaskId || taskRun.taskId,
+      };
+    }
+
     // If the task timed out or failed, attempt to stop remote task execution
     if (taskRun.taskId) {
       try {
@@ -248,15 +313,40 @@ export async function runBrowserTask({
 }
 
 /**
- * Gracefully terminates a browser session for a given chat and marks it completed in DB.
+ * Safely stops only the active running task on Browser Use Cloud,
+ * preserving the underlying browser session and its URL/DOM/auth state.
  */
-export async function stopBrowserSession({ chatId }: { chatId: string }) {
+export async function stopActiveTask({ chatId }: { chatId: string }) {
   const existing = await getTestSessionByChatId({ chatId });
   if (!existing) {
     return { message: "No session found for this chat", success: false };
   }
 
-  if (existing.browserSessionId) {
+  await updateTestSessionStatus({
+    id: existing.id,
+    status: "cancelled",
+  });
+
+  return { success: true };
+}
+
+/**
+ * Terminates the browser session for a given chat.
+ * If terminateCloudSession is false, preserves the cloud browser instance for continuation.
+ */
+export async function stopBrowserSession({
+  chatId,
+  terminateCloudSession = false,
+}: {
+  chatId: string;
+  terminateCloudSession?: boolean;
+}) {
+  const existing = await getTestSessionByChatId({ chatId });
+  if (!existing) {
+    return { message: "No session found for this chat", success: false };
+  }
+
+  if (terminateCloudSession && existing.browserSessionId) {
     try {
       const client = getBrowserUseClient();
       await client.sessions.stop(existing.browserSessionId);
@@ -270,7 +360,7 @@ export async function stopBrowserSession({ chatId }: { chatId: string }) {
 
   await updateTestSessionStatus({
     id: existing.id,
-    status: "completed",
+    status: terminateCloudSession ? "completed" : "cancelled",
   });
 
   return { success: true };

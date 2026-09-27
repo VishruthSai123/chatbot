@@ -296,6 +296,10 @@ export async function POST(request: Request) {
                   "evaluateTestResult",
                 ],
           instructions: systemPrompt({
+            activeRun:
+              ExecutionTracker.getActiveRun(id) ||
+              ((activeTestSession as any)?.executionSnapshot as any) ||
+              null,
             activeTestSession,
             requestHints,
             supportsTools,
@@ -304,7 +308,10 @@ export async function POST(request: Request) {
           model: getLanguageModel(chatModel),
           onAbort() {
             stopWaitingStatus();
-            ExecutionTracker.cancelRun({ chatId: id }).catch(() => null);
+            ExecutionTracker.cancelRun({
+              chatId: id,
+              reason: "user_aborted_stream",
+            }).catch(() => null);
           },
           onChunk({ chunk }) {
             if (isModelStreamActivity(chunk)) {

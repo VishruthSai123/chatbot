@@ -68,6 +68,7 @@ export const systemPrompt = ({
   requestHints,
   supportsTools,
   activeTestSession,
+  activeRun,
 }: {
   requestHints: RequestHints;
   supportsTools: boolean;
@@ -75,10 +76,15 @@ export const systemPrompt = ({
     browserSessionId: string | null;
     targetUrl: string;
     status: string;
+    executionSnapshot?: any;
   } | null;
+  activeRun?: any | null;
 }) => {
   const requestPrompt = getRequestPromptFromHints(requestHints);
-  const activeSessionText = getActiveSessionPrompt(activeTestSession);
+  const activeSessionText = getActiveSessionPrompt(
+    activeTestSession,
+    activeRun
+  );
 
   if (!supportsTools) {
     return `${regularPrompt}\n\n${requestPrompt}`;

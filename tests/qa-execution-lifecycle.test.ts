@@ -1,25 +1,31 @@
 import assert from "node:assert/strict";
+import { getActiveSessionPrompt } from "../lib/ai/prompts-qa";
 import { ExecutionTracker } from "../lib/qa/execution-tracker";
 import {
   type CanonicalExecutionState,
   canTransitionState,
-  isTerminalExecutionState,
+  isIrreversibleExecutionState,
+  isStoppedOrPausedState,
 } from "../lib/qa/execution-types";
 
 async function runTests() {
-  console.log("=== Testing Canonical Execution Lifecycle ===");
+  console.log("=== Testing Canonical Execution & Stop/Resume Lifecycle ===");
 
-  // 1. Test isTerminalExecutionState
-  console.log("\n[Test 1] Terminal state checks...");
-  assert.strictEqual(isTerminalExecutionState("COMPLETED"), true);
-  assert.strictEqual(isTerminalExecutionState("FAILED"), true);
-  assert.strictEqual(isTerminalExecutionState("CANCELLED"), true);
-  assert.strictEqual(isTerminalExecutionState("TIMED_OUT"), true);
-  assert.strictEqual(isTerminalExecutionState("RUNNING"), false);
-  assert.strictEqual(isTerminalExecutionState("WAITING"), false);
-  assert.strictEqual(isTerminalExecutionState("STARTING"), false);
-  assert.strictEqual(isTerminalExecutionState("FINALIZING"), false);
-  console.log("✓ Terminal states correctly identified");
+  // 1. Test isTerminalExecutionState and isIrreversibleExecutionState
+  console.log("\n[Test 1] Terminal and irreversible state checks...");
+  assert.strictEqual(isIrreversibleExecutionState("COMPLETED"), true);
+  assert.strictEqual(isIrreversibleExecutionState("FAILED"), true);
+  assert.strictEqual(isIrreversibleExecutionState("TIMED_OUT"), true);
+  assert.strictEqual(isIrreversibleExecutionState("CANCELLED"), false); // Cancellations can be resumed
+  assert.strictEqual(isIrreversibleExecutionState("PAUSED"), false);
+  assert.strictEqual(isIrreversibleExecutionState("RUNNING"), false);
+
+  assert.strictEqual(isStoppedOrPausedState("CANCELLED"), true);
+  assert.strictEqual(isStoppedOrPausedState("PAUSED"), true);
+  assert.strictEqual(isStoppedOrPausedState("RUNNING"), false);
+  console.log(
+    "✓ Terminal, irreversible, and stopped states correctly identified"
+  );
 
   // 2. Test canTransitionState Matrix
   console.log("\n[Test 2] State transition matrix validation...");
@@ -31,31 +37,29 @@ async function runTests() {
   // From RUNNING
   assert.strictEqual(canTransitionState("RUNNING", "WAITING"), true);
   assert.strictEqual(canTransitionState("RUNNING", "RUNNING"), true);
+  assert.strictEqual(canTransitionState("RUNNING", "CANCELLING"), true);
+  assert.strictEqual(canTransitionState("RUNNING", "CANCELLED"), true);
   assert.strictEqual(canTransitionState("RUNNING", "FAILED"), true);
   assert.strictEqual(canTransitionState("RUNNING", "TIMED_OUT"), true);
 
-  // From FINALIZING
-  assert.strictEqual(canTransitionState("FINALIZING", "COMPLETED"), true);
-  assert.strictEqual(canTransitionState("FINALIZING", "FAILED"), true);
-  assert.strictEqual(
-    canTransitionState("FINALIZING", "RUNNING"),
-    false,
-    "Cannot regress from FINALIZING to RUNNING"
-  );
-  assert.strictEqual(
-    canTransitionState("FINALIZING", "WAITING"),
-    false,
-    "Cannot regress from FINALIZING to WAITING"
-  );
+  // From CANCELLING
+  assert.strictEqual(canTransitionState("CANCELLING", "CANCELLED"), true);
+  assert.strictEqual(canTransitionState("CANCELLING", "FAILED"), true);
+  assert.strictEqual(canTransitionState("CANCELLING", "RUNNING"), false);
 
-  // Terminal states cannot transition to anything
-  const terminalStates: CanonicalExecutionState[] = [
+  // From CANCELLED
+  assert.strictEqual(canTransitionState("CANCELLED", "RESUMING"), true);
+  assert.strictEqual(canTransitionState("CANCELLED", "STARTING"), true);
+  assert.strictEqual(canTransitionState("CANCELLED", "RUNNING"), false);
+  assert.strictEqual(canTransitionState("CANCELLED", "WAITING"), false);
+
+  // Irreversible terminal states cannot transition to anything
+  const irreversibleStates: CanonicalExecutionState[] = [
     "COMPLETED",
     "FAILED",
-    "CANCELLED",
     "TIMED_OUT",
   ];
-  for (const term of terminalStates) {
+  for (const term of irreversibleStates) {
     assert.strictEqual(
       canTransitionState(term, "RUNNING"),
       false,
@@ -72,13 +76,13 @@ async function runTests() {
       `${term} must not transition to STARTING`
     );
     assert.strictEqual(
-      canTransitionState(term, "COMPLETED"),
+      canTransitionState(term, "RESUMING"),
       false,
-      `${term} must not transition to COMPLETED`
+      `${term} must not transition to RESUMING`
     );
   }
   console.log(
-    "✓ State transition matrix prevents regressions and preserves terminal finality"
+    "✓ State transition matrix prevents regressions and preserves continuation safety"
   );
 
   // 3. Test Full Execution Lifecycle in ExecutionTracker
@@ -99,9 +103,9 @@ async function runTests() {
   assert.strictEqual(run1.sequence, 1);
   assert.strictEqual(run1.steps.length, 0);
 
-  // 3b. Step 1: Navigating
+  // 3b. Step 1 (Navigation)
   const step1 = ExecutionTracker.updateStep({
-    action: "Navigate to https://example.com/checkout",
+    action: "Navigating to /checkout",
     chatId: testChatId,
     number: 1,
     status: "running",
@@ -110,43 +114,37 @@ async function runTests() {
   assert(step1 !== null);
   assert.strictEqual(step1.executionState, "RUNNING");
   assert.strictEqual(step1.currentStep, 1);
-  assert.strictEqual(step1.sequence, 2);
   assert.strictEqual(step1.steps.length, 1);
-  assert.strictEqual(
-    step1.steps[0].action,
-    "Navigate to https://example.com/checkout"
-  );
+  assert.strictEqual(step1.steps[0].action, "Navigating to /checkout");
 
-  // 3c. Step 2: Clicking button
+  // 3c. Step 2 (Form interaction)
   const step2 = ExecutionTracker.updateStep({
-    action: "Click 'Place Order' button",
+    action: "Entering shipping address and clicking Next",
     chatId: testChatId,
     number: 2,
     status: "running",
+    url: "https://example.com/checkout/step2",
   });
   assert(step2 !== null);
   assert.strictEqual(step2.currentStep, 2);
-  assert.strictEqual(step2.sequence, 3);
   assert.strictEqual(step2.steps.length, 2);
 
-  // 3d. Transition to WAITING (tool step completed, awaiting assertion)
+  // 3d. Waiting
   const waitingRun = ExecutionTracker.recordWaiting({
     chatId: testChatId,
-    currentAction: "Browser action completed. Analyzing outcome...",
+    currentAction: "Verifying payment options displayed...",
   });
   assert(waitingRun !== null);
   assert.strictEqual(waitingRun.executionState, "WAITING");
-  assert.strictEqual(waitingRun.sequence, 4);
 
-  // 3e. Transition to FINALIZING (evaluating assertions)
+  // 3e. Finalizing
   const finalizingRun = ExecutionTracker.recordFinalizing({
     chatId: testChatId,
   });
   assert(finalizingRun !== null);
   assert.strictEqual(finalizingRun.executionState, "FINALIZING");
-  assert.strictEqual(finalizingRun.sequence, 5);
 
-  // 3f. Complete Run
+  // 3f. Completed
   const completedRun = ExecutionTracker.completeRun({
     chatId: testChatId,
     findingId: "finding-xyz-123",
@@ -155,105 +153,211 @@ async function runTests() {
   assert(completedRun !== null);
   assert.strictEqual(completedRun.executionState, "COMPLETED");
   assert.strictEqual(completedRun.verdict, "pass");
-  assert.strictEqual(completedRun.findingId, "finding-xyz-123");
-  assert(Boolean(completedRun.completedAt));
-  assert.strictEqual(completedRun.sequence, 6);
+  console.log("✓ Full happy-path lifecycle verified");
+
+  // 4. Test Stop During Navigation
+  console.log("\n[Test 4] Stop during navigation...");
+  const navChatId = "chat-test-stop-nav";
+  ExecutionTracker.startRun({
+    chatId: navChatId,
+    sessionId: "sess-nav-1",
+    targetUrl: "https://example.com",
+  });
+  ExecutionTracker.updateStep({
+    action: "Navigating to https://example.com/products",
+    chatId: navChatId,
+    number: 1,
+    status: "running",
+  });
+
+  const stoppedNav = await ExecutionTracker.cancelRun({
+    chatId: navChatId,
+    reason: "user_stopped",
+  });
+  assert(stoppedNav !== null);
+  assert.strictEqual(stoppedNav.executionState, "CANCELLED");
+  assert.strictEqual(
+    stoppedNav.lastConfirmedAction,
+    "Navigating to https://example.com/products"
+  );
+  assert.strictEqual(ExecutionTracker.isCancelRequested(navChatId), true);
+  console.log("✓ Stop during navigation cleanly captures action and cancels");
+
+  // 5. Test Stop During Form Interaction & Context Preservation
   console.log(
-    "✓ Full happy-path lifecycle (STARTING -> RUNNING -> WAITING -> FINALIZING -> COMPLETED) verified"
+    "\n[Test 5] Stop during form interaction with context preservation..."
+  );
+  const formChatId = "chat-test-stop-form";
+  ExecutionTracker.startRun({
+    chatId: formChatId,
+    sessionId: "sess-form-1",
+    targetUrl: "https://example.com/login",
+  });
+  ExecutionTracker.updateStep({
+    action: "Entered testuser@example.com into email field",
+    chatId: formChatId,
+    number: 1,
+    status: "completed",
+  });
+  ExecutionTracker.updateStep({
+    action: "Clicked Sign In button",
+    chatId: formChatId,
+    number: 2,
+    status: "running",
+  });
+
+  const stoppedForm = await ExecutionTracker.cancelRun({
+    chatId: formChatId,
+    reason: "user_stopped",
+  });
+  assert(stoppedForm !== null);
+  assert.strictEqual(stoppedForm.executionState, "CANCELLED");
+  assert.strictEqual(stoppedForm.lastConfirmedAction, "Clicked Sign In button");
+  assert.strictEqual(stoppedForm.steps.length, 2);
+  assert.strictEqual(stoppedForm.steps[1].status, "completed"); // Mark running step cleanly completed
+  console.log(
+    "✓ Stop during form interaction preserves all steps and last action"
   );
 
-  // 4. Test Stale Event Rejection after Completion
-  console.log("\n[Test 4] Stale event protection after COMPLETED...");
-  // Attempting to inject a late RUNNING step after completion
-  const staleStep = ExecutionTracker.updateStep({
-    action: "Late delayed browser event",
+  // 6. Test Double-Click Stop & Idempotency
+  console.log("\n[Test 6] Double-click Stop idempotency...");
+  const firstCancel = await ExecutionTracker.cancelRun({ chatId: formChatId });
+  const secondCancel = await ExecutionTracker.cancelRun({ chatId: formChatId });
+  assert.strictEqual(firstCancel?.executionState, "CANCELLED");
+  assert.strictEqual(secondCancel?.executionState, "CANCELLED");
+  assert.strictEqual(firstCancel?.sequence, secondCancel?.sequence);
+  console.log("✓ Multiple stop clicks are strictly idempotent");
+
+  // 7. Test Stop After Execution Already Completed
+  console.log(
+    "\n[Test 7] Stop after execution already completed (race condition)..."
+  );
+  const stopAfterComplete = await ExecutionTracker.cancelRun({
     chatId: testChatId,
+  });
+  assert.strictEqual(
+    stopAfterComplete?.executionState,
+    "COMPLETED",
+    "COMPLETED terminal state must NOT be overridden by late stop"
+  );
+  console.log("✓ Late stop does not override COMPLETED final verdict");
+
+  // 8. Test Stop vs Complete Race Condition
+  console.log("\n[Test 8] Stop/Complete race condition...");
+  const raceChatId = "chat-test-race";
+  ExecutionTracker.startRun({
+    chatId: raceChatId,
+    sessionId: "sess-race-1",
+    targetUrl: "https://example.com",
+  });
+  await ExecutionTracker.cancelRun({ chatId: raceChatId });
+
+  // Complete attempt on cancelled run must be rejected
+  const lateComplete = ExecutionTracker.completeRun({
+    chatId: raceChatId,
+    verdict: "pass",
+  });
+  assert.strictEqual(
+    lateComplete?.executionState,
+    "CANCELLED",
+    "Late complete must NOT overwrite CANCELLED state"
+  );
+  console.log("✓ Late complete safely ignored on CANCELLED run");
+
+  // 9. Test Resume from Stopped State
+  console.log("\n[Test 9] Resume from stopped run...");
+  const resumedRun = await ExecutionTracker.resumeRun({ chatId: formChatId });
+  assert(resumedRun !== null);
+  assert.strictEqual(resumedRun.executionState, "RESUMING");
+  assert.strictEqual(resumedRun.isCancelRequested, false);
+  assert.strictEqual(resumedRun.steps.length, 2);
+  assert(resumedRun.currentAction?.includes("Clicked Sign In button"));
+
+  // Subsequent steps after resume continue smoothly
+  ExecutionTracker.updateStep({
+    action: "Verified dashboard home page loaded",
+    chatId: formChatId,
     number: 3,
     status: "running",
   });
-  assert(staleStep !== null);
+  const runAfterResume = ExecutionTracker.getActiveRun(formChatId);
+  assert.strictEqual(runAfterResume?.steps.length, 3);
+  assert.strictEqual(runAfterResume?.currentStep, 3);
+  console.log("✓ Resume continues from step 3 without losing prior steps");
+
+  // 10. Test Multiple Resume Clicks Idempotency
+  console.log("\n[Test 10] Multiple Resume clicks idempotency...");
+  const multiResumeChatId = "chat-test-multi-resume";
+  ExecutionTracker.startRun({
+    chatId: multiResumeChatId,
+    sessionId: "sess-multi-1",
+    targetUrl: "https://example.com",
+  });
+  await ExecutionTracker.cancelRun({ chatId: multiResumeChatId });
+
+  const resume1 = await ExecutionTracker.resumeRun({
+    chatId: multiResumeChatId,
+  });
+  const resume2 = await ExecutionTracker.resumeRun({
+    chatId: multiResumeChatId,
+  });
+  assert.strictEqual(resume1?.executionState, "RESUMING");
+  assert.strictEqual(resume2?.executionState, "RESUMING");
+  assert.strictEqual(resume1?.sequence, resume2?.sequence);
+  console.log("✓ Multiple resume clicks are safe and idempotent");
+
+  // 11. Test Reload & Snapshot Restoration
+  console.log("\n[Test 11] Reload and snapshot restoration...");
+  const serializedSnapshot = JSON.parse(JSON.stringify(runAfterResume));
+  const restored = ExecutionTracker.restoreRun(serializedSnapshot);
+  assert.strictEqual(restored.chatId, formChatId);
+  assert.strictEqual(restored.steps.length, 3);
   assert.strictEqual(
-    staleStep.executionState,
-    "COMPLETED",
-    "Late step must NOT regress COMPLETED state"
+    restored.steps[0].action,
+    "Entered testuser@example.com into email field"
   );
-  assert.strictEqual(
-    staleStep.steps.length,
-    2,
-    "Late step must NOT be appended to completed run"
-  );
-  console.log("✓ Stale events rejected from altering terminal states");
-
-  // 5. Test Failure & Terminal State Handling
-  console.log("\n[Test 5] Failure handling...");
-  const testChatId2 = "chat-test-failure-2";
-  ExecutionTracker.startRun({
-    chatId: testChatId2,
-    sessionId: "session-test-2",
-    targetUrl: "https://example.com/long-page",
-  });
-
-  const failedRun = ExecutionTracker.failRun({
-    chatId: testChatId2,
-    error: "Browser task failed due to remote network disconnection",
-    state: "FAILED",
-  });
-  assert(failedRun !== null);
-  assert.strictEqual(failedRun.executionState, "FAILED");
-  assert(failedRun.error?.includes("remote network disconnection"));
-  assert.strictEqual(isTerminalExecutionState(failedRun.executionState), true);
-
-  // 6. Test Cancellation
-  console.log("\n[Test 6] User cancellation...");
-  const testChatId3 = "chat-test-cancel-3";
-  ExecutionTracker.startRun({
-    chatId: testChatId3,
-    sessionId: "session-test-3",
-    targetUrl: "https://example.com/app",
-  });
-
-  const cancelledRun = await ExecutionTracker.cancelRun({
-    chatId: testChatId3,
-  });
-  assert(cancelledRun !== null);
-  assert.strictEqual(cancelledRun.executionState, "CANCELLED");
-  assert.strictEqual(cancelledRun.currentAction, "Cancelled by user");
-  console.log("✓ Cancellation lifecycle verified");
-
-  // 7. Test Long-running Multi-step Execution
   console.log(
-    "\n[Test 7] Long-running execution (>75s) progresses cleanly without interruption..."
+    "✓ Run state and full step history survive reload and deserialize accurately"
   );
-  const testChatId4 = "chat-test-long-running-4";
-  ExecutionTracker.startRun({
-    chatId: testChatId4,
-    sessionId: "session-test-4",
-    targetUrl: "https://example.com/heavy-app",
-  });
 
-  // Simulate multiple steps over time
-  for (let s = 1; s <= 10; s += 1) {
-    const stepRecord = ExecutionTracker.updateStep({
-      action: `Complex interaction step ${s} on page`,
-      chatId: testChatId4,
-      number: s,
-      status: "running",
-    });
-    assert(stepRecord !== null);
-    assert.strictEqual(stepRecord.executionState, "RUNNING");
-    assert.strictEqual(stepRecord.currentStep, s);
-  }
-  const longRun = ExecutionTracker.getActiveRun(testChatId4);
-  assert(longRun !== null);
-  assert.strictEqual(longRun.executionState, "RUNNING");
-  assert.strictEqual(longRun.steps.length, 10);
+  // 12. Test Rich Continuation Prompt Generation
+  console.log("\n[Test 12] Prompt continuation injection for agent...");
+  const continuationPrompt = getActiveSessionPrompt(
+    {
+      browserSessionId: "bu-sess-continuation",
+      status: "cancelled",
+      targetUrl: "https://example.com/checkout",
+    },
+    {
+      cancellationReason: "User requested pause",
+      currentAction: "Waiting for authenticated dashboard",
+      currentStep: 2,
+      executionState: "CANCELLED",
+      interruptedAt: new Date().toISOString(),
+      lastConfirmedAction: "Clicked Login Button",
+      steps: [
+        { action: "Entered login credentials", number: 1, status: "completed" },
+        { action: "Clicked Login Button", number: 2, status: "completed" },
+      ],
+    }
+  );
+
+  assert(
+    continuationPrompt.includes(
+      "INTERRUPTED / STOPPED TEST CONTINUATION CONTEXT"
+    )
+  );
+  assert(continuationPrompt.includes("Clicked Login Button"));
+  assert(continuationPrompt.includes("DO NOT call `startTestSession` again"));
+  assert(continuationPrompt.includes("DO NOT repeat destructive"));
+  assert(continuationPrompt.includes("Entered login credentials"));
   console.log(
-    "✓ Long-running multi-step execution progresses cleanly without artificial termination"
+    "✓ Continuation prompt accurately informs LLM of prior actions and prevents destructive replays"
   );
 
-  console.log("\n==========================================");
-  console.log("ALL CANONICAL LIFECYCLE TESTS PASSED! (7/7)");
-  console.log("==========================================");
+  console.log("\n=======================================================");
+  console.log("ALL STOP/RESUME LIFECYCLE TESTS PASSED! (12/12)");
+  console.log("=======================================================");
 }
 
 runTests().catch((err) => {

@@ -54,6 +54,7 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
 
         const result = await runBrowserTask({
           instruction,
+          isCancelled: () => ExecutionTracker.isCancelRequested(chatId),
           onStep: (step) => {
             stepCount += 1;
 
@@ -102,7 +103,7 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
                 data: {
                   currentAction: safeAction,
                   currentStep: stepCount,
-                  executionState: "RUNNING",
+                  executionState: updatedRun.executionState,
                   lastActivityAt: updatedRun.lastActivityAt,
                   runId: updatedRun.runId,
                   sequence: updatedRun.sequence,
@@ -122,6 +123,48 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
           },
           sessionId: browserSessionId,
         });
+
+        // If task was stopped/cancelled by user
+        if (result.isStopped || ExecutionTracker.isCancelRequested(chatId)) {
+          const cancelledRun = await ExecutionTracker.cancelRun({
+            chatId,
+            reason: "user_stopped",
+          });
+
+          dataStream.write({
+            data: "Test execution stopped by user.",
+            transient: true,
+            type: "data-qa-status",
+          });
+
+          if (cancelledRun) {
+            dataStream.write({
+              data: {
+                cancellationReason: "user_stopped",
+                currentAction: "Test stopped by user",
+                currentStep: stepCount,
+                executionState: "CANCELLED",
+                lastActivityAt: cancelledRun.lastActivityAt,
+                lastConfirmedAction: cancelledRun.lastConfirmedAction,
+                runId: cancelledRun.runId,
+                sequence: cancelledRun.sequence,
+                sessionId: cancelledRun.sessionId,
+                startedAt: cancelledRun.startedAt,
+                steps: cancelledRun.steps,
+              },
+              transient: true,
+              type: "data-qa-execution",
+            });
+          }
+
+          return {
+            isStopped: true,
+            output: `Test execution was stopped by the user after ${stepCount} browser steps. Last confirmed action: "${cancelledRun?.lastConfirmedAction || "Initial navigation"}". The browser remains open at this exact page state. To resume, the user can say "Continue" or "Resume from where you stopped".`,
+            stepCount,
+            success: false,
+            taskId: result.taskId,
+          };
+        }
 
         // Mark current sub-step and overall execution as WAITING for verification
         const waitingAction = result.isSuccess

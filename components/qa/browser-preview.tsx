@@ -4,8 +4,10 @@ import {
   AlertCircle,
   ExternalLink,
   Globe,
+  Loader2,
   Maximize2,
   Minimize2,
+  Play,
   RotateCw,
   Square,
   X,
@@ -77,6 +79,7 @@ export function BrowserPreview({
   const { setArtifact } = useArtifact();
   const [iframeKey] = useState<number>(0);
   const [isStopping, setIsStopping] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [wrapperDimensions, setWrapperDimensions] = useState<{
@@ -215,21 +218,96 @@ export function BrowserPreview({
       return;
     }
     setIsStopping(true);
+    setMetadata?.((prev) => ({
+      ...prev,
+      currentAction: "Stopping execution safely...",
+      executionState: "CANCELLING",
+    }));
     try {
-      await fetch(`/api/qa/session?chatId=${chatId}`, { method: "DELETE" });
+      const res = await fetch("/api/qa/session", {
+        body: JSON.stringify({ action: "stop", chatId }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      const data = await res.json();
       mutateSession();
       setMetadata?.((prev) => ({
         ...prev,
-        currentAction: "Session stopped by user",
-        executionState: "CANCELLED",
+        currentAction: data?.execution?.currentAction || "Test stopped by user",
+        executionState: data?.execution?.executionState || "CANCELLED",
+        lastConfirmedAction: data?.execution?.lastConfirmedAction,
+        recentSteps: data?.execution?.steps || prev.recentSteps,
         status: "stopped",
       }));
+      window.dispatchEvent(
+        new CustomEvent("qa:stop-requested", {
+          detail: { chatId },
+        })
+      );
     } catch (err) {
       console.error("[BrowserPreview] Error stopping session:", err);
     } finally {
       setIsStopping(false);
     }
   }, [chatId, isStopping, mutateSession, setMetadata]);
+
+  const handleResumeSession = useCallback(async () => {
+    if (!chatId || isResuming) {
+      return;
+    }
+    setIsResuming(true);
+    setMetadata?.((prev) => ({
+      ...prev,
+      currentAction: "Resuming test execution...",
+      executionState: "RESUMING",
+      status: "working",
+    }));
+    try {
+      const res = await fetch("/api/qa/session", {
+        body: JSON.stringify({ action: "resume", chatId }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+      const data = await res.json();
+      mutateSession();
+      if (data?.execution) {
+        setMetadata?.((prev) => ({
+          ...prev,
+          currentAction: data.execution.currentAction || "Resuming test...",
+          executionState: data.execution.executionState || "RESUMING",
+          recentSteps: data.execution.steps || prev.recentSteps,
+          status: "working",
+        }));
+      }
+      window.dispatchEvent(
+        new CustomEvent("qa:resume-requested", {
+          detail: { chatId },
+        })
+      );
+    } catch (err) {
+      console.error("[BrowserPreview] Error resuming session:", err);
+    } finally {
+      setIsResuming(false);
+    }
+  }, [chatId, isResuming, mutateSession, setMetadata]);
+
+  useEffect(() => {
+    const handleRemoteStop = (e: Event) => {
+      const customEvent = e as CustomEvent<{ chatId: string }>;
+      if (customEvent.detail?.chatId === chatId) {
+        mutateSession();
+        setMetadata?.((prev) => ({
+          ...prev,
+          currentAction: "Test stopped by user",
+          executionState: "CANCELLED",
+          status: "stopped",
+        }));
+      }
+    };
+    window.addEventListener("qa:stop-requested", handleRemoteStop);
+    return () =>
+      window.removeEventListener("qa:stop-requested", handleRemoteStop);
+  }, [chatId, mutateSession, setMetadata]);
 
   const handleOpenExternal = useCallback(() => {
     if (liveUrl) {
@@ -326,40 +404,47 @@ export function BrowserPreview({
 
             {/* Subtle Live Status Indicator */}
             <div className="flex items-center gap-1.5 text-[11px]">
-              {status === "live" && (
+              {isStopping || metadata?.executionState === "CANCELLING" ? (
+                <span className="flex items-center gap-1 font-medium text-amber-500">
+                  <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
+                  Cancelling…
+                </span>
+              ) : isResuming || metadata?.executionState === "RESUMING" ? (
+                <span className="flex items-center gap-1 font-medium text-blue-500">
+                  <span className="size-1.5 animate-pulse rounded-full bg-blue-500" />
+                  Resuming…
+                </span>
+              ) : status === "live" ? (
                 <span className="flex items-center gap-1 font-medium text-emerald-500">
                   <span className="size-1.5 rounded-full bg-emerald-500" />
                   Live
                 </span>
-              )}
-              {status === "working" && (
+              ) : status === "working" ? (
                 <span className="flex items-center gap-1 font-medium text-amber-500">
                   <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
                   Agent working
                 </span>
-              )}
-              {status === "connecting" && (
+              ) : status === "connecting" ? (
                 <span className="flex items-center gap-1 font-medium text-amber-500">
                   <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
                   Connecting
                 </span>
-              )}
-              {status === "idle" && (
-                <span className="flex items-center gap-1 text-muted-foreground">
-                  <span className="size-1.5 rounded-full bg-muted-foreground/40" />
-                  Ready
-                </span>
-              )}
-              {status === "error" && (
+              ) : status === "error" ? (
                 <span className="flex items-center gap-1 font-medium text-destructive">
                   <span className="size-1.5 rounded-full bg-destructive" />
                   Error
                 </span>
-              )}
-              {status === "stopped" && (
+              ) : status === "stopped" ||
+                metadata?.executionState === "CANCELLED" ||
+                metadata?.executionState === "PAUSED" ? (
+                <span className="flex items-center gap-1 font-medium text-amber-500/90">
+                  <span className="size-1.5 rounded-full bg-amber-500/80" />
+                  Stopped
+                </span>
+              ) : (
                 <span className="flex items-center gap-1 text-muted-foreground">
                   <span className="size-1.5 rounded-full bg-muted-foreground/40" />
-                  Stopped
+                  Ready
                 </span>
               )}
             </div>
@@ -408,23 +493,72 @@ export function BrowserPreview({
             </TooltipContent>
           </Tooltip>
 
-          {(status === "live" || status === "working") && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  aria-label="Stop browser session"
-                  className="size-7 text-muted-foreground hover:text-destructive"
-                  disabled={isStopping}
-                  onClick={handleStopSession}
-                  size="icon"
-                  variant="ghost"
-                >
-                  <Square className="size-3 fill-current" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Stop browser session</TooltipContent>
-            </Tooltip>
-          )}
+          {/* STOP CONTROL */}
+          {(status === "live" || status === "working" || isStopping) &&
+            metadata?.executionState !== "CANCELLED" &&
+            metadata?.executionState !== "COMPLETED" && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    aria-label={
+                      isStopping ? "Cancelling..." : "Stop test execution"
+                    }
+                    className="size-7 text-muted-foreground hover:text-destructive"
+                    disabled={
+                      isStopping || metadata?.executionState === "CANCELLING"
+                    }
+                    onClick={handleStopSession}
+                    size="icon"
+                    variant="ghost"
+                  >
+                    {isStopping || metadata?.executionState === "CANCELLING" ? (
+                      <Loader2 className="size-3.5 animate-spin text-amber-500" />
+                    ) : (
+                      <Square className="size-3 fill-current" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {isStopping || metadata?.executionState === "CANCELLING"
+                    ? "Cancelling..."
+                    : "Stop test execution"}
+                </TooltipContent>
+              </Tooltip>
+            )}
+
+          {/* RESUME CONTROL */}
+          {(metadata?.executionState === "CANCELLED" ||
+            metadata?.executionState === "PAUSED" ||
+            status === "stopped") &&
+            metadata?.executionState !== "COMPLETED" && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    aria-label={
+                      isResuming ? "Resuming..." : "Resume test execution"
+                    }
+                    className="size-7 text-emerald-600 hover:text-emerald-500 hover:bg-emerald-500/10"
+                    disabled={
+                      isResuming || metadata?.executionState === "RESUMING"
+                    }
+                    onClick={handleResumeSession}
+                    size="icon"
+                    variant="ghost"
+                  >
+                    {isResuming || metadata?.executionState === "RESUMING" ? (
+                      <Loader2 className="size-3.5 animate-spin text-emerald-500" />
+                    ) : (
+                      <Play className="size-3.5 fill-current" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {isResuming || metadata?.executionState === "RESUMING"
+                    ? "Resuming..."
+                    : "Resume test execution"}
+                </TooltipContent>
+              </Tooltip>
+            )}
 
           <Tooltip>
             <TooltipTrigger asChild>

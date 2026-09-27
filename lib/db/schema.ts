@@ -163,13 +163,22 @@ export const testSession = pgTable("TestSession", {
     .notNull()
     .references(() => chat.id, { onDelete: "cascade" }),
   createdAt: timestamp("createdAt").notNull().defaultNow(),
+  executionSnapshot: json("executionSnapshot"),
   id: uuid("id").primaryKey().notNull().defaultRandom(),
   liveUrl: text("liveUrl"),
   projectId: uuid("projectId").references(() => project.id, {
     onDelete: "set null",
   }),
   status: varchar("status", {
-    enum: ["initializing", "active", "evaluating", "completed", "error"],
+    enum: [
+      "initializing",
+      "active",
+      "evaluating",
+      "completed",
+      "error",
+      "cancelled",
+      "paused",
+    ],
   })
     .notNull()
     .default("initializing"),

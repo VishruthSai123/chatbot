@@ -3,18 +3,30 @@ export type CanonicalExecutionState =
   | "STARTING"
   | "RUNNING"
   | "WAITING"
+  | "PAUSING"
+  | "PAUSED"
+  | "CANCELLING"
+  | "CANCELLED"
+  | "RESUMING"
   | "FINALIZING"
   | "COMPLETED"
   | "FAILED"
-  | "CANCELLED"
   | "TIMED_OUT";
 
-export const TERMINAL_EXECUTION_STATES = new Set<CanonicalExecutionState>([
+export const IRREVERSIBLE_EXECUTION_STATES = new Set<CanonicalExecutionState>([
   "COMPLETED",
   "FAILED",
-  "CANCELLED",
   "TIMED_OUT",
 ]);
+
+export function isIrreversibleExecutionState(
+  state: CanonicalExecutionState | string | undefined
+): boolean {
+  if (!state) {
+    return false;
+  }
+  return IRREVERSIBLE_EXECUTION_STATES.has(state as CanonicalExecutionState);
+}
 
 export function isTerminalExecutionState(
   state: CanonicalExecutionState | string | undefined
@@ -22,25 +34,61 @@ export function isTerminalExecutionState(
   if (!state) {
     return false;
   }
-  return TERMINAL_EXECUTION_STATES.has(state as CanonicalExecutionState);
+  // Irreversible terminal states
+  return (
+    state === "COMPLETED" ||
+    state === "FAILED" ||
+    state === "TIMED_OUT" ||
+    state === "CANCELLED"
+  );
+}
+
+export function isStoppedOrPausedState(
+  state: CanonicalExecutionState | string | undefined
+): boolean {
+  return state === "CANCELLED" || state === "PAUSED";
 }
 
 /**
  * State Transition Matrix:
- * Prevents regressions (e.g. late RUNNING event reverting a COMPLETED/FAILED run).
+ * Prevents regressions (e.g. late RUNNING event reverting a COMPLETED/CANCELLED run).
+ * Supports safe cancellation, pausing, and resuming.
  */
 export function canTransitionState(
   currentState: CanonicalExecutionState,
   nextState: CanonicalExecutionState
 ): boolean {
-  // Terminal states are irreversible
-  if (isTerminalExecutionState(currentState)) {
+  // Completely irreversible terminal states
+  if (isIrreversibleExecutionState(currentState)) {
     return false;
   }
 
-  // Once FINALIZING, can only transition to terminal states
+  // Once CANCELLING, can only transition to CANCELLED or FAILED
+  if (currentState === "CANCELLING") {
+    return nextState === "CANCELLED" || nextState === "FAILED";
+  }
+
+  // Once PAUSING, can only transition to PAUSED, CANCELLED, or FAILED
+  if (currentState === "PAUSING") {
+    return (
+      nextState === "PAUSED" ||
+      nextState === "CANCELLED" ||
+      nextState === "FAILED"
+    );
+  }
+
+  // If CANCELLED or PAUSED, can only transition if resuming or starting a new run
+  if (isStoppedOrPausedState(currentState)) {
+    return (
+      nextState === "RESUMING" ||
+      nextState === "STARTING" ||
+      nextState === "CANCELLED"
+    );
+  }
+
+  // Once FINALIZING, can only transition to terminal states or CANCELLED
   if (currentState === "FINALIZING") {
-    return isTerminalExecutionState(nextState);
+    return isTerminalExecutionState(nextState) || nextState === "CANCELLED";
   }
 
   return true;
@@ -59,6 +107,7 @@ export interface ExecutionStep {
 export interface ExecutionRecord {
   activeTaskId?: string | null;
   browserSessionId?: string; // Browser Use Cloud Session ID
+  cancellationReason?: string;
   chatId: string;
   completedAt?: string;
   currentAction?: string;
@@ -66,7 +115,12 @@ export interface ExecutionRecord {
   error?: string;
   executionState: CanonicalExecutionState;
   findingId?: string | null;
+  interruptedAt?: string;
+  isCancelRequested?: boolean;
   lastActivityAt: string;
+  lastConfirmedAction?: string;
+  originalIntent?: string;
+  remainingGoals?: string[];
   runId: string;
   sequence: number;
   sessionId: string; // Database TestSession ID
@@ -78,13 +132,16 @@ export interface ExecutionRecord {
 
 export interface QAExecutionStreamData {
   browserSessionId?: string;
+  cancellationReason?: string;
   completedAt?: string;
   currentAction?: string;
   currentStep?: number;
   error?: string;
   executionState: CanonicalExecutionState;
   findingId?: string | null;
+  interruptedAt?: string;
   lastActivityAt: string;
+  lastConfirmedAction?: string;
   runId: string;
   sequence: number;
   sessionId: string;
@@ -108,14 +165,24 @@ export function getStateDescription(
       return (
         currentAction || "Analyzing browser outcome and verifying state..."
       );
+    case "PAUSING":
+      return "Pausing test execution...";
+    case "PAUSED":
+      return "Test paused. Say 'Continue' to resume.";
+    case "CANCELLING":
+      return "Stopping browser execution safely...";
+    case "CANCELLED":
+      return "Test stopped. Say 'Continue' to resume from where you left off.";
+    case "RESUMING":
+      return (
+        currentAction || "Resuming test execution from last confirmed step..."
+      );
     case "FINALIZING":
       return "Recording test findings and assertions...";
     case "COMPLETED":
       return "Test completed successfully.";
     case "FAILED":
       return currentAction || "Test execution failed.";
-    case "CANCELLED":
-      return "Test was stopped by user.";
     case "TIMED_OUT":
       return "Test timed out before completion.";
     default:

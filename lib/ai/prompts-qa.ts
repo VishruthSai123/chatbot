@@ -50,6 +50,22 @@ export function getActiveSessionPrompt(
     browserSessionId: string | null;
     targetUrl: string;
     status: string;
+    executionSnapshot?: any;
+  } | null,
+  activeRun?: {
+    currentAction?: string;
+    currentStep?: number;
+    steps?: Array<{
+      action: string;
+      number: number;
+      status: string;
+      url?: string;
+    }>;
+    lastConfirmedAction?: string;
+    cancellationReason?: string;
+    interruptedAt?: string;
+    executionState?: string;
+    originalIntent?: string;
   } | null
 ): string {
   if (
@@ -58,6 +74,52 @@ export function getActiveSessionPrompt(
     session.status === "error"
   ) {
     return "";
+  }
+
+  // Derive execution context from memory or persisted snapshot
+  const snapshot = activeRun || (session.executionSnapshot as any) || null;
+  const isStopped =
+    session.status === "cancelled" ||
+    session.status === "paused" ||
+    snapshot?.executionState === "CANCELLED" ||
+    snapshot?.executionState === "PAUSED";
+
+  if (isStopped && snapshot) {
+    const completedSteps = (snapshot.steps || []).filter(
+      (s: any) => s.status === "completed" || s.status === "running"
+    );
+    const stepsSummary =
+      completedSteps.length > 0
+        ? completedSteps
+            .map(
+              (s: any) =>
+                `- Step ${s.number}: ${s.action}${s.url ? ` (at ${s.url})` : ""}`
+            )
+            .join("\n")
+        : "- Initial browser setup / navigation";
+
+    return `
+## INTERRUPTED / STOPPED TEST CONTINUATION CONTEXT
+A browser QA execution on this session was previously STOPPED by the user:
+- Target Application URL: \`${session.targetUrl}\`
+- Cloud Browser Session ID: \`${session.browserSessionId}\`
+- Last Confirmed Browser Action: "${snapshot.lastConfirmedAction || snapshot.currentAction || "Navigation"}"
+- Step Reached Before Stop: Step ${snapshot.currentStep || completedSteps.length || 1}
+- Stop Reason: ${snapshot.cancellationReason || "User clicked stop"}
+- Interrupted At: ${snapshot.interruptedAt || "Recently"}
+
+Completed Browser Actions prior to stop:
+${stepsSummary}
+
+CRITICAL RULES FOR RESUMING / CONTINUING:
+1. When the user says "Continue", "Resume", "Go on", or "Pick up from where you stopped":
+   - DO NOT call \`startTestSession\` again. The browser session is ALREADY open and preserved at \`${session.browserSessionId}\`.
+   - DO NOT start the test from the beginning or navigate to the initial URL unless explicitly requested.
+   - DO NOT repeat destructive or already confirmed actions (e.g. DO NOT re-submit payment, DO NOT re-enter forms already submitted, DO NOT re-click buttons that were already processed in completed steps).
+   - DIRECTLY call \`runBrowserStep\` with \`browserSessionId: "${session.browserSessionId}"\` instructing Browser Use to continue ONLY with the NEXT remaining steps.
+   - Verify what page/state the browser is on and proceed to the next testing objectives.
+2. If the user explicitly asks to start completely fresh or test a different URL, you may call \`startTestSession\`.
+`;
   }
 
   return `

@@ -644,11 +644,20 @@ export async function updateTestSessionStatus({
   status,
   browserSessionId,
   liveUrl,
+  executionSnapshot,
 }: {
   id: string;
-  status: "initializing" | "active" | "evaluating" | "completed" | "error";
+  status:
+    | "initializing"
+    | "active"
+    | "evaluating"
+    | "completed"
+    | "error"
+    | "cancelled"
+    | "paused";
   browserSessionId?: string;
   liveUrl?: string;
+  executionSnapshot?: any;
 }) {
   try {
     const [updated] = await db
@@ -657,6 +666,39 @@ export async function updateTestSessionStatus({
         status,
         ...(browserSessionId ? { browserSessionId } : {}),
         ...(liveUrl ? { liveUrl } : {}),
+        ...(executionSnapshot === undefined ? {} : { executionSnapshot }),
+        updatedAt: new Date(),
+      })
+      .where(eq(testSession.id, id))
+      .returning();
+    return updated;
+  } catch (error) {
+    throw new ChatbotError("bad_request:database", { cause: error });
+  }
+}
+
+export async function updateTestSessionExecutionSnapshot({
+  id,
+  executionSnapshot,
+  status,
+}: {
+  id: string;
+  executionSnapshot: any;
+  status?:
+    | "initializing"
+    | "active"
+    | "evaluating"
+    | "completed"
+    | "error"
+    | "cancelled"
+    | "paused";
+}) {
+  try {
+    const [updated] = await db
+      .update(testSession)
+      .set({
+        executionSnapshot,
+        ...(status ? { status } : {}),
         updatedAt: new Date(),
       })
       .where(eq(testSession.id, id))
