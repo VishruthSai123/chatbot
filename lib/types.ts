@@ -5,11 +5,16 @@ import type { createDocument } from "./ai/tools/create-document";
 import type { evaluateTestResult } from "./ai/tools/evaluate-test-result";
 import type { getWeather } from "./ai/tools/get-weather";
 import type { requestSuggestions } from "./ai/tools/request-suggestions";
+import type { requestUserClarification } from "./ai/tools/request-user-clarification";
 import type { runBrowserStep } from "./ai/tools/run-browser-step";
 import type { startTestSession } from "./ai/tools/start-test-session";
 import type { updateDocument } from "./ai/tools/update-document";
 import type { Suggestion } from "./db/schema";
-import type { DownloadItem, QAExecutionStreamData } from "./qa/execution-types";
+import type {
+  ClarificationQuestion,
+  DownloadItem,
+  QAExecutionStreamData,
+} from "./qa/execution-types";
 
 export const messageMetadataSchema = z.object({
   createdAt: z.string(),
@@ -26,6 +31,9 @@ type requestSuggestionsTool = InferUITool<
 
 type startTestSessionTool = InferUITool<ReturnType<typeof startTestSession>>;
 type runBrowserStepTool = InferUITool<ReturnType<typeof runBrowserStep>>;
+type requestUserClarificationTool = InferUITool<
+  ReturnType<typeof requestUserClarification>
+>;
 type evaluateTestResultTool = InferUITool<
   ReturnType<typeof evaluateTestResult>
 >;
@@ -37,6 +45,7 @@ export type ChatTools = {
   requestSuggestions: requestSuggestionsTool;
   startTestSession: startTestSessionTool;
   runBrowserStep: runBrowserStepTool;
+  requestUserClarification: requestUserClarificationTool;
   evaluateTestResult: evaluateTestResultTool;
 };
 
@@ -95,6 +104,7 @@ export type CustomUIDataTypes = {
     findingId?: string | null;
   };
   "qa-download": DownloadItem;
+  "qa-clarification": ClarificationQuestion;
 };
 
 export type ChatMessage = UIMessage<

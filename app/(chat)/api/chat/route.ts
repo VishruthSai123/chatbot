@@ -27,6 +27,7 @@ import { editDocument } from "@/lib/ai/tools/edit-document";
 import { evaluateTestResult } from "@/lib/ai/tools/evaluate-test-result";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
+import { requestUserClarification } from "@/lib/ai/tools/request-user-clarification";
 import { runBrowserStep } from "@/lib/ai/tools/run-browser-step";
 import { startTestSession } from "@/lib/ai/tools/start-test-session";
 import { updateDocument } from "@/lib/ai/tools/update-document";
@@ -223,6 +224,20 @@ export async function POST(request: Request) {
           currentRun.isCancelRequested)
       ) {
         await ExecutionTracker.resumeRun({ chatId: id });
+      } else if (
+        currentRun &&
+        (currentRun.executionState === "WAITING_FOR_USER" ||
+          Boolean(currentRun.pendingQuestion))
+      ) {
+        const textPart = message.parts?.find((p) => p.type === "text") as any;
+        const answerText = textPart?.text?.trim() || "";
+        if (currentRun.pendingQuestion && answerText) {
+          ExecutionTracker.resumeWithAnswer({
+            answer: answerText,
+            chatId: id,
+            questionId: currentRun.pendingQuestion.questionId,
+          });
+        }
       }
       if (activeTestSession?.browserSessionId) {
         const isUsable = await isBrowserSessionUsable(
@@ -398,6 +413,7 @@ export async function POST(request: Request) {
                   "requestSuggestions",
                   "startTestSession",
                   "runBrowserStep",
+                  "requestUserClarification",
                   "evaluateTestResult",
                 ],
           instructions: systemPrompt({
@@ -492,6 +508,10 @@ export async function POST(request: Request) {
               dataStream,
               modelId: chatModel,
               session,
+            }),
+            requestUserClarification: requestUserClarification({
+              chatId: id,
+              dataStream,
             }),
             runBrowserStep: runBrowserStep({ chatId: id, dataStream }),
             startTestSession: startTestSession({

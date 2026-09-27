@@ -3,6 +3,7 @@ export type CanonicalExecutionState =
   | "STARTING"
   | "RUNNING"
   | "WAITING"
+  | "WAITING_FOR_USER"
   | "PAUSING"
   | "PAUSED"
   | "CANCELLING"
@@ -49,6 +50,12 @@ export function isStoppedOrPausedState(
   return state === "CANCELLED" || state === "PAUSED";
 }
 
+export function isWaitingForUserState(
+  state: CanonicalExecutionState | string | undefined
+): boolean {
+  return state === "WAITING_FOR_USER";
+}
+
 /**
  * State Transition Matrix:
  * Prevents regressions (e.g. late RUNNING event reverting a COMPLETED/CANCELLED run).
@@ -72,6 +79,18 @@ export function canTransitionState(
   if (currentState === "PAUSING") {
     return (
       nextState === "PAUSED" ||
+      nextState === "CANCELLED" ||
+      nextState === "FAILED"
+    );
+  }
+
+  // WAITING_FOR_USER: can transition to RESUMING/RUNNING (answer received),
+  // CANCELLING/CANCELLED (user stops), or FAILED
+  if (currentState === "WAITING_FOR_USER") {
+    return (
+      nextState === "RESUMING" ||
+      nextState === "RUNNING" ||
+      nextState === "CANCELLING" ||
       nextState === "CANCELLED" ||
       nextState === "FAILED"
     );
@@ -120,11 +139,64 @@ export interface DownloadItem {
   url?: string;
 }
 
+/**
+ * The type of clarification the agent is requesting from the user.
+ * - "choice": Pick from a list of options
+ * - "text": Free-form text input
+ * - "number": Numeric input
+ * - "confirm" / "confirmation": Confirmation action (e.g. Yes/No, Continue/Cancel)
+ */
+export type ClarificationQuestionType =
+  | "choice"
+  | "text"
+  | "number"
+  | "confirm"
+  | "confirmation"
+  | (string & {});
+
+/**
+ * Represents a structured question the agent asks the user mid-execution.
+ */
+export interface ClarificationQuestion {
+  /** Context about what the agent was doing when it asked */
+  agentContext?: string;
+  /** The user's answer once provided */
+  answer?: string;
+  /** When the question was answered */
+  answeredAt?: string;
+  /** When the question was asked */
+  askedAt: string;
+  /** Alias for questionType */
+  inputType?: ClarificationQuestionType;
+  /** Whether the question has been answered */
+  isAnswered: boolean;
+  /** Options for "choice" or "confirm" type questions */
+  options?: string[];
+  /** Optional placeholder for text or numeric input */
+  placeholder?: string;
+  /** Alias for questionText */
+  question?: string;
+  /** Unique identifier for this question */
+  questionId: string;
+  /** The question text shown to the user */
+  questionText: string;
+  /** The type of input requested */
+  questionType: ClarificationQuestionType;
+  /** Whether user response is required to proceed */
+  required?: boolean;
+  /** Active run identifier */
+  runId?: string;
+  /** Structured question discriminator */
+  type?: "USER_INPUT_REQUIRED";
+}
+
 export interface ExecutionRecord {
   activeTaskId?: string | null;
   browserSessionId?: string; // Browser Use Cloud Session ID
   cancellationReason?: string;
   chatId: string;
+  /** History of all clarification Q&As in this run */
+  clarificationHistory?: ClarificationQuestion[];
   completedAt?: string;
   currentAction?: string;
   currentStep?: number;
@@ -137,6 +209,8 @@ export interface ExecutionRecord {
   lastActivityAt: string;
   lastConfirmedAction?: string;
   originalIntent?: string;
+  /** Active clarification question awaiting user response */
+  pendingQuestion?: ClarificationQuestion | null;
   remainingGoals?: string[];
   runId: string;
   sequence: number;
@@ -160,6 +234,7 @@ export interface QAExecutionStreamData {
   interruptedAt?: string;
   lastActivityAt: string;
   lastConfirmedAction?: string;
+  pendingQuestion?: ClarificationQuestion | null;
   runId: string;
   sequence: number;
   sessionId: string;
@@ -183,6 +258,8 @@ export function getStateDescription(
       return (
         currentAction || "Analyzing browser outcome and verifying state..."
       );
+    case "WAITING_FOR_USER":
+      return currentAction || "Waiting for your input to continue...";
     case "PAUSING":
       return "Pausing test execution...";
     case "PAUSED":

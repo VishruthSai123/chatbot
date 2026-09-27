@@ -81,6 +81,7 @@ export function ChatShell() {
         execState === "STARTING" ||
         execState === "RUNNING" ||
         execState === "WAITING" ||
+        execState === "WAITING_FOR_USER" ||
         execState === "FINALIZING" ||
         execState === "RESUMING" ||
         execState === "CANCELLING";
@@ -153,9 +154,11 @@ export function ChatShell() {
           liveUrl: isEnded ? undefined : (s.liveUrl ?? safePrev.liveUrl),
           status: isEnded
             ? "stopped"
-            : s.status === "active"
-              ? "live"
-              : safePrev.status || "idle",
+            : exec?.executionState === "WAITING_FOR_USER"
+              ? "waiting-for-user"
+              : s.status === "active"
+                ? "live"
+                : safePrev.status || "idle",
           targetUrl: s.targetUrl || safePrev.targetUrl,
           ...(exec
             ? {
@@ -170,6 +173,10 @@ export function ChatShell() {
                 downloads: exec.downloads || safePrev.downloads,
                 executionState: exec.executionState || safePrev.executionState,
                 findingId: exec.findingId || safePrev.findingId,
+                pendingQuestion:
+                  exec.pendingQuestion === undefined
+                    ? safePrev.pendingQuestion
+                    : exec.pendingQuestion,
                 recentSteps: exec.steps || safePrev.recentSteps,
                 runId: exec.runId || safePrev.runId,
                 sequence: exec.sequence || safePrev.sequence,

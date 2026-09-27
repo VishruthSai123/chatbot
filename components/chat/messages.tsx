@@ -167,6 +167,7 @@ function PureMessages({
         (p) =>
           p.type === "tool-startTestSession" ||
           p.type === "tool-runBrowserStep" ||
+          p.type === "tool-requestUserClarification" ||
           p.type === "tool-evaluateTestResult"
       ));
 
@@ -183,6 +184,7 @@ function PureMessages({
         (p) =>
           p.type === "tool-startTestSession" ||
           p.type === "tool-runBrowserStep" ||
+          p.type === "tool-requestUserClarification" ||
           p.type === "tool-evaluateTestResult"
       )
   );

@@ -2,6 +2,7 @@
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { memo, useCallback } from "react";
 import { AgentProcessing } from "@/components/qa/agent-processing";
+import { ClarificationInput } from "@/components/qa/clarification-input";
 import { FindingCard } from "@/components/qa/finding-card";
 import { useArtifactMetadataSelector } from "@/hooks/use-artifact";
 import type { Vote } from "@/lib/db/schema";
@@ -102,6 +103,9 @@ export const QAToolGroup = memo(function PureQAToolGroup({
     (meta) => meta?.executionState
   );
   const metadataStatus = useArtifactMetadataSelector((meta) => meta?.status);
+  const metadataPendingQuestion = useArtifactMetadataSelector(
+    (meta) => meta?.pendingQuestion
+  );
 
   const isThisMessageStopped = qaParts.some(
     (p) =>
@@ -133,6 +137,18 @@ export const QAToolGroup = memo(function PureQAToolGroup({
       ? metadataFinding
       : null;
 
+  // Show clarification input when there's a pending question
+  const showClarification =
+    !isThisMessageStopped &&
+    metadataPendingQuestion &&
+    !metadataPendingQuestion.isAnswered &&
+    metadataExecState === "WAITING_FOR_USER";
+
+  // Also show answered questions from the current stream for context
+  const clarificationPart = qaParts.find(
+    (p) => p.type === "tool-requestUserClarification"
+  );
+
   return (
     <div className="w-full space-y-2.5" key={`qa-group-${messageId}`}>
       <AgentProcessing
@@ -142,6 +158,35 @@ export const QAToolGroup = memo(function PureQAToolGroup({
         onStop={onStop}
         parts={qaParts}
       />
+
+      {/* Clarification question input */}
+      {Boolean(showClarification && chatId) && (
+        <ClarificationInput
+          chatId={chatId || ""}
+          question={metadataPendingQuestion}
+        />
+      )}
+
+      {/* Show answered clarification from tool output */}
+      {Boolean(
+        clarificationPart &&
+          clarificationPart.state === "output-available" &&
+          clarificationPart.output?.success &&
+          clarificationPart.output?.answer
+      ) && (
+        <ClarificationInput
+          chatId={chatId || ""}
+          question={{
+            answer: clarificationPart?.output?.answer,
+            answeredAt: new Date().toISOString(),
+            askedAt: new Date().toISOString(),
+            isAnswered: true,
+            questionId: clarificationPart?.output?.questionId || "answered",
+            questionText: clarificationPart?.output?.questionText || "Question",
+            questionType: "text",
+          }}
+        />
+      )}
 
       {rawFinding ? (
         <div className="w-full max-w-[min(100%,560px)] animate-in fade-in-0 duration-300">
@@ -255,6 +300,7 @@ const PurePreviewMessage = ({
   const qaToolTypes = new Set([
     "tool-startTestSession",
     "tool-runBrowserStep",
+    "tool-requestUserClarification",
     "tool-evaluateTestResult",
   ]);
   const qaParts = message.parts?.filter((p) => qaToolTypes.has(p.type)) ?? [];

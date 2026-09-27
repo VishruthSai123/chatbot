@@ -171,7 +171,8 @@ export async function GET(request: Request) {
           testSession.status === "completed" ||
           isEnded) &&
         execution.executionState !== "COMPLETED" &&
-        execution.executionState !== "FAILED"
+        execution.executionState !== "FAILED" &&
+        execution.executionState !== "WAITING_FOR_USER"
       ) {
         execution.executionState = "COMPLETED";
         execution.completedAt =
@@ -261,6 +262,7 @@ export async function GET(request: Request) {
             title: lastSessionFinding.title,
           }
         : null,
+      pendingQuestion: execution?.pendingQuestion || null,
       session: {
         browserScreenHeight: cloudScreenHeight,
         browserScreenWidth: cloudScreenWidth,

@@ -45,6 +45,7 @@ export type BrowserStatus =
   | "connecting"
   | "live"
   | "working"
+  | "waiting-for-user"
   | "idle"
   | "error"
   | "stopped";
@@ -74,6 +75,11 @@ export type BrowserArtifactMetadata = {
   errorMessage?: string;
   isFullscreen?: boolean;
   downloads?: DownloadItem[];
+  pendingQuestion?: any;
+  finding?: any;
+  startedAt?: string;
+  completedAt?: string;
+  cancelledAt?: string;
 };
 
 interface BrowserPreviewProps {

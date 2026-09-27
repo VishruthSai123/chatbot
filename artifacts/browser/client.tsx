@@ -130,12 +130,18 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
             errorMessage: exec.error || safePrev.errorMessage,
             executionState: exec.executionState,
             findingId: exec.findingId || safePrev.findingId,
+            pendingQuestion:
+              exec.pendingQuestion === undefined
+                ? safePrev.pendingQuestion
+                : exec.pendingQuestion,
             recentSteps: exec.steps || safePrev.recentSteps || [],
             runId: exec.runId || safePrev.runId,
             sequence: exec.sequence,
             status: isTerminal
               ? computedStatus
-              : computedStatus || safePrev.status,
+              : exec.executionState === "WAITING_FOR_USER"
+                ? "waiting-for-user"
+                : computedStatus || safePrev.status,
             verdict: exec.verdict || safePrev.verdict,
           };
         });
@@ -215,6 +221,19 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
           return {
             ...safePrev,
             downloads: updatedDownloads,
+          };
+        });
+      }
+
+      if (streamPart.type === "data-qa-clarification") {
+        const question = streamPart.data;
+        setMetadata((prev) => {
+          const safePrev = prev ?? {};
+          return {
+            ...safePrev,
+            executionState: "WAITING_FOR_USER",
+            pendingQuestion: question,
+            status: "waiting-for-user",
           };
         });
       }

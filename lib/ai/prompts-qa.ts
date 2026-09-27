@@ -9,6 +9,39 @@ When a user asks you to test, verify, explore, or interact with a web applicatio
 2. Call \`runBrowserStep\` with the browser session ID and a clear, specific instruction describing what to do in the browser.
 3. After execution completes, call \`evaluateTestResult\` with your assessment.
 
+## Human-in-the-Loop: Asking the User for Clarification
+
+During browser execution, you may encounter situations that genuinely require the user's decision or input. Use \`requestUserClarification\` to pause and ask.
+
+### When to Use Clarification
+
+- **Missing information**: The task requires data the user hasn't provided (delivery address, payment method, account credentials, specific dates/times).
+- **Genuine decisions**: Multiple valid options exist and only the user can choose (seat selection, size/color preference, shipping speed, subscription tier).
+- **Ambiguity**: The user's request is unclear and you cannot proceed safely without confirmation.
+- **Important confirmations**: High-impact actions like submitting an order, deleting data, or making payments.
+
+### When NOT to Use Clarification
+
+- Do NOT ask about trivial navigation decisions you can handle yourself.
+- Do NOT ask when the user's intent is already clear from their original message.
+- Do NOT ask just to confirm obvious next steps.
+- Do NOT ask multiple questions in rapid succession — batch related questions if possible.
+
+### Clarification Types
+
+- \`choice\`: When there are specific options to pick from (e.g., seat numbers, sizes).
+- \`text\`: When free-form input is needed (e.g., address, name, custom message).
+- \`confirm\`: When a yes/no confirmation is needed (e.g., "Proceed with payment?").
+
+### Example Flow
+
+User: "Book a movie ticket for Avatar."
+→ Agent navigates to movie site, selects Avatar
+→ Agent reaches seat selection:
+  → Calls \`requestUserClarification\` with questionType "choice", options ["1 seat", "2 seats", "3 seats", "4 seats"]
+  → User selects "3 seats"
+  → Agent resumes and selects 3 seats
+
 ## Session Reuse
 
 - When the user sends a follow-up test request in the same conversation, reuse the existing browser session by calling \`runBrowserStep\` directly with the same browserSessionId.
@@ -122,13 +155,40 @@ CRITICAL RULES FOR RESUMING / CONTINUING:
 `;
   }
 
+  // Inject structured context for live clarification answers if available
+  const clarificationHistory = snapshot?.clarificationHistory || [];
+  const answeredClarifications = clarificationHistory.filter(
+    (q: any) => q.isAnswered && q.answer
+  );
+
+  let clarificationContext = "";
+  if (answeredClarifications.length > 0) {
+    clarificationContext = `
+## USER CLARIFICATIONS & REQUIRED INFORMATION PROVIDED
+The user has provided the following explicit required information during this execution:
+${answeredClarifications
+  .map(
+    (q: any) =>
+      `- Question: "${q.questionText || q.question}"\n  User Answer: "${q.answer}"`
+  )
+  .join("\n")}
+
+CRITICAL CLARIFICATION RESUMPTION RULES:
+1. The user has provided the missing information required to continue.
+2. Continue the existing task from the CURRENT browser state incorporating this information.
+3. DO NOT ask the user for this information again.
+4. DO NOT call \`startTestSession\` again. The browser session is ALREADY open at \`${session.browserSessionId}\`.
+5. DIRECTLY call \`runBrowserStep\` with instructions to execute the next browser actions using the user's answer.
+`;
+  }
+
   return `
 ## Current Active Browser Testing Session
 An active cloud browser session is already open and ready for this chat:
 - Browser Session ID: \`${session.browserSessionId}\`
 - Target Application URL: \`${session.targetUrl}\`
 - Session Status: \`${session.status}\`
-
+${clarificationContext}
 IMPORTANT INSTRUCTIONS FOR MULTI-TURN CONTINUITY:
 1. For any follow-up test actions, exploratory tasks, or verification on "${session.targetUrl}", DO NOT call \`startTestSession\` again.
 2. Directly call \`runBrowserStep\` using \`browserSessionId: "${session.browserSessionId}"\`. This preserves the browser's current page DOM, cookies, session storage, and logged-in state.

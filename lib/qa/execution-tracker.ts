@@ -1,12 +1,14 @@
 import { getBrowserUseClient } from "@/lib/browser-use/client";
 import { generateUUID } from "@/lib/utils";
 import {
+  type ClarificationQuestion,
   canTransitionState,
   type DownloadItem,
   type ExecutionRecord,
   type ExecutionStep,
   isIrreversibleExecutionState,
   isStoppedOrPausedState,
+  isWaitingForUserState,
 } from "./execution-types";
 
 interface GlobalQARunRegistry {
@@ -347,6 +349,121 @@ function recordWaiting({
 }
 
 /**
+ * Transitions execution to WAITING_FOR_USER (agent needs user clarification).
+ * Stores the question data on the run so it survives reload.
+ */
+function recordWaitingForUser({
+  chatId,
+  runId,
+  question,
+}: {
+  chatId: string;
+  runId?: string;
+  question: ClarificationQuestion;
+}): ExecutionRecord | null {
+  const run = registry.activeRunsByChat.get(chatId);
+  if (!run) {
+    return null;
+  }
+  if (runId && run.runId !== runId) {
+    return null;
+  }
+
+  // Do not override cancellation or terminal states
+  if (
+    isCancelRequested(chatId) ||
+    !canTransitionState(run.executionState, "WAITING_FOR_USER")
+  ) {
+    return run;
+  }
+
+  run.executionState = "WAITING_FOR_USER";
+  run.currentAction = `Waiting for your input: ${question.questionText.slice(0, 100)}`;
+  run.pendingQuestion = question;
+  if (!run.clarificationHistory) {
+    run.clarificationHistory = [];
+  }
+  run.lastActivityAt = new Date().toISOString();
+  run.sequence += 1;
+
+  // Mark all running steps as completed since we're pausing for user
+  for (const step of run.steps) {
+    if (step.status === "running") {
+      step.status = "completed";
+    }
+  }
+
+  persistExecutionSnapshot(run);
+  return run;
+}
+
+/**
+ * Records the user's answer to the pending question and resumes execution.
+ * Moves the answered question to clarificationHistory and clears pendingQuestion.
+ */
+function resumeWithAnswer({
+  chatId,
+  runId,
+  questionId,
+  answer,
+}: {
+  chatId: string;
+  runId?: string;
+  questionId: string;
+  answer: string;
+}): ExecutionRecord | null {
+  const run = registry.activeRunsByChat.get(chatId);
+  if (!run) {
+    return null;
+  }
+  if (runId && run.runId !== runId) {
+    return null;
+  }
+
+  // Verify question matches
+  if (!run.pendingQuestion || run.pendingQuestion.questionId !== questionId) {
+    console.warn(
+      `[ExecutionTracker] resumeWithAnswer: question ${questionId} does not match pending question ${run.pendingQuestion?.questionId}`
+    );
+    return run;
+  }
+
+  // Already answered — idempotent
+  if (run.pendingQuestion.isAnswered) {
+    return run;
+  }
+
+  const now = new Date().toISOString();
+
+  // Mark the question as answered
+  const answeredQuestion: ClarificationQuestion = {
+    ...run.pendingQuestion,
+    answer,
+    answeredAt: now,
+    isAnswered: true,
+  };
+
+  // Move to history
+  if (!run.clarificationHistory) {
+    run.clarificationHistory = [];
+  }
+  run.clarificationHistory.push(answeredQuestion);
+
+  // Clear pending question
+  run.pendingQuestion = null;
+
+  // Transition to RESUMING
+  run.executionState = "RESUMING";
+  run.currentAction = `Received answer: "${answer.slice(0, 100)}". Continuing...`;
+  run.isCancelRequested = false;
+  run.lastActivityAt = now;
+  run.sequence += 1;
+
+  persistExecutionSnapshot(run);
+  return run;
+}
+
+/**
  * Transitions to FINALIZING (assertion evaluation in progress).
  */
 function recordFinalizing({
@@ -637,6 +754,7 @@ async function cancelRun({
   run.executionState = "CANCELLED";
   run.completedAt = new Date().toISOString();
   run.currentAction = "Test stopped by user";
+  run.pendingQuestion = null;
   run.sequence += 1;
 
   // Mark all steps cleanly
@@ -731,9 +849,10 @@ async function resumeRun({
 
   if (
     !isStoppedOrPausedState(run.executionState) &&
+    !isWaitingForUserState(run.executionState) &&
     run.executionState !== "RESUMING"
   ) {
-    // Only stopped/paused runs can be resumed
+    // Only stopped/paused/waiting-for-user runs can be resumed
     return run;
   }
 
@@ -1014,6 +1133,16 @@ async function reconcileRun(chatId: string): Promise<ExecutionRecord | null> {
           Boolean(cloudSession?.finishedAt);
 
         if (isSessionDead) {
+          if (
+            run.executionState === "WAITING_FOR_USER" &&
+            !run.isCancelRequested
+          ) {
+            console.log(
+              `[ExecutionTracker] Reconciling: cloud session ${run.browserSessionId} ended while WAITING_FOR_USER. Preserving WAITING_FOR_USER state.`
+            );
+            return run;
+          }
+
           console.log(
             `[ExecutionTracker] Reconciling: cloud session ${run.browserSessionId} is dead. Marking execution COMPLETED.`
           );
@@ -1091,6 +1220,16 @@ async function reconcileRun(chatId: string): Promise<ExecutionRecord | null> {
         const task = await client.tasks.get(targetTaskId).catch(() => null);
         if (task) {
           if (task.status === "finished") {
+            if (
+              run.executionState === "WAITING_FOR_USER" &&
+              !run.isCancelRequested
+            ) {
+              console.log(
+                `[ExecutionTracker] Reconciling: cloud task ${targetTaskId} is finished, but run is WAITING_FOR_USER. Preserving WAITING_FOR_USER state.`
+              );
+              return run;
+            }
+
             console.log(
               `[ExecutionTracker] Reconciling: cloud task ${targetTaskId} is finished. Updating state to COMPLETED.`
             );
@@ -1147,6 +1286,16 @@ async function reconcileRun(chatId: string): Promise<ExecutionRecord | null> {
           }
 
           if (task.status === "stopped") {
+            if (
+              run.executionState === "WAITING_FOR_USER" &&
+              !run.isCancelRequested
+            ) {
+              console.log(
+                `[ExecutionTracker] Reconciling: cloud task ${targetTaskId} is stopped, but run is WAITING_FOR_USER. Preserving WAITING_FOR_USER state.`
+              );
+              return run;
+            }
+
             console.log(
               `[ExecutionTracker] Reconciling: cloud task ${targetTaskId} is stopped. Updating state to CANCELLED.`
             );
@@ -1312,9 +1461,11 @@ export const ExecutionTracker = {
   reconcileRun,
   recordFinalizing,
   recordWaiting,
+  recordWaitingForUser,
   registerAbortController,
   restoreRun,
   resumeRun,
+  resumeWithAnswer,
   setActiveTaskId,
   startRun,
   unregisterAbortController,

@@ -211,6 +211,8 @@ export const AgentProcessing = memo(
       null
     );
     const startTimeRef = useRef<number | null>(null);
+    const pauseStartRef = useRef<number | null>(null);
+    const totalPausedMsRef = useRef<number>(0);
 
     const handleStop = useCallback(
       async (e?: React.MouseEvent) => {
@@ -363,6 +365,7 @@ export const AgentProcessing = memo(
       (execState === "STARTING" ||
         execState === "RUNNING" ||
         (execState === "WAITING" && isLoading) ||
+        execState === "WAITING_FOR_USER" ||
         execState === "RESUMING" ||
         execState === "FINALIZING" ||
         execState === "CANCELLING");
@@ -389,8 +392,18 @@ export const AgentProcessing = memo(
     // Track active execution duration
     useEffect(() => {
       let interval: NodeJS.Timeout | null = null;
+      const isWaitingForUser = execState === "WAITING_FOR_USER";
 
-      if (isAnyRunning) {
+      if (isWaitingForUser) {
+        if (pauseStartRef.current === null) {
+          pauseStartRef.current = Date.now();
+        }
+      } else if (pauseStartRef.current !== null) {
+        totalPausedMsRef.current += Date.now() - pauseStartRef.current;
+        pauseStartRef.current = null;
+      }
+
+      if (isAnyRunning && !isWaitingForUser) {
         if (startTimeRef.current === null) {
           const runStartedAt = metadata?.startedAt
             ? new Date(metadata.startedAt).getTime()
@@ -399,28 +412,31 @@ export const AgentProcessing = memo(
             !Number.isNaN(runStartedAt) && runStartedAt > 0
               ? runStartedAt
               : Date.now();
+          totalPausedMsRef.current = 0;
           setElapsedSeconds(
             Math.max(1, Math.floor((Date.now() - startTimeRef.current) / 1000))
           );
         }
         interval = setInterval(() => {
           if (startTimeRef.current) {
-            setElapsedSeconds(
-              Math.max(
-                1,
-                Math.floor((Date.now() - startTimeRef.current) / 1000)
-              )
-            );
+            const activeMs =
+              Date.now() - startTimeRef.current - totalPausedMsRef.current;
+            setElapsedSeconds(Math.max(1, Math.floor(activeMs / 1000)));
           }
         }, 1000);
-      } else if (startTimeRef.current !== null) {
+      } else if (!isAnyRunning && startTimeRef.current !== null) {
         const finalSecs = Math.max(
           1,
-          Math.ceil((Date.now() - startTimeRef.current) / 1000)
+          Math.ceil(
+            (Date.now() - startTimeRef.current - totalPausedMsRef.current) /
+              1000
+          )
         );
         setPersistedDuration(finalSecs);
         setElapsedSeconds(finalSecs);
         startTimeRef.current = null;
+        totalPausedMsRef.current = 0;
+        pauseStartRef.current = null;
       }
 
       return () => {
@@ -428,7 +444,7 @@ export const AgentProcessing = memo(
           clearInterval(interval);
         }
       };
-    }, [isAnyRunning, metadata?.startedAt]);
+    }, [isAnyRunning, execState, metadata?.startedAt]);
 
     // Build Lightweight Action Items
     const actions: ActionItem[] = useMemo(() => {
@@ -598,6 +614,10 @@ export const AgentProcessing = memo(
         return "Test was stopped by user.";
       }
 
+      if (execState === "WAITING_FOR_USER") {
+        return metadata?.currentAction || "Waiting for your input...";
+      }
+
       if (execState === "TIMED_OUT") {
         return "Test timed out before completion.";
       }
@@ -730,6 +750,9 @@ export const AgentProcessing = memo(
       }
       if (execState === "CANCELLING") {
         return "Cancelling...";
+      }
+      if (execState === "WAITING_FOR_USER") {
+        return "Waiting for your answer";
       }
       if (!isOnline && isAnyRunning) {
         return "Reconnecting…";

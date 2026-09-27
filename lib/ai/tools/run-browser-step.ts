@@ -91,13 +91,23 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
           });
         }
 
-        // Ensure run is active in tracker
+        // Ensure run is active in tracker:
+        // If resuming from pause, stop, or clarification, preserve the SAME runId and accumulated steps!
         if (
+          activeRun &&
+          (activeRun.executionState === "RESUMING" ||
+            activeRun.executionState === "WAITING_FOR_USER")
+        ) {
+          activeRun.executionState = "RUNNING";
+          activeRun.browserSessionId = effectiveSessionId;
+          activeRun.isCancelRequested = false;
+          activeRun.lastActivityAt = new Date().toISOString();
+          activeRun.sequence += 1;
+        } else if (
           !activeRun ||
           activeRun.executionState === "COMPLETED" ||
           activeRun.executionState === "FAILED" ||
-          activeRun.executionState === "CANCELLED" ||
-          activeRun.executionState === "RESUMING"
+          activeRun.executionState === "CANCELLED"
         ) {
           activeRun = ExecutionTracker.startRun({
             browserSessionId: effectiveSessionId,
