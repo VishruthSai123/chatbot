@@ -5,9 +5,11 @@ import {
   stopBrowserSession,
 } from "@/lib/browser-use/session";
 import {
+  getQAFindingsBySessionId,
   getTestSessionByChatId,
   updateTestSessionStatus,
 } from "@/lib/db/queries";
+import { ExecutionTracker } from "@/lib/qa/execution-tracker";
 
 export async function GET(request: Request) {
   const session = await auth();
@@ -30,7 +32,7 @@ export async function GET(request: Request) {
     const testSession = await getTestSessionByChatId({ chatId });
 
     if (!testSession) {
-      return Response.json({ session: null });
+      return Response.json({ execution: null, session: null });
     }
 
     const { status: initialStatus, liveUrl: initialLiveUrl } = testSession;
@@ -67,7 +69,46 @@ export async function GET(request: Request) {
       }
     }
 
+    // Retrieve active or last execution from tracker
+    let execution = ExecutionTracker.getActiveRun(chatId);
+
+    // If tracker is empty (e.g. server reboot), reconstruct from DB findings
+    if (!execution && testSession) {
+      const findings = await getQAFindingsBySessionId({
+        testSessionId: testSession.id,
+      }).catch(() => []);
+
+      const lastFinding = findings.at(-1);
+      const isComplete = currentStatus === "completed" || Boolean(lastFinding);
+
+      execution = {
+        activeTaskId: null,
+        browserSessionId: testSession.browserSessionId ?? undefined,
+        chatId: testSession.chatId,
+        completedAt: isComplete
+          ? testSession.updatedAt.toISOString()
+          : undefined,
+        currentAction: isComplete ? "Test completed" : "Ready",
+        currentStep: 0,
+        executionState: isComplete
+          ? "COMPLETED"
+          : currentStatus === "active"
+            ? "WAITING"
+            : "STARTING",
+        findingId: lastFinding?.id,
+        lastActivityAt: testSession.updatedAt.toISOString(),
+        runId: `restored-${testSession.id}`,
+        sequence: 1,
+        sessionId: testSession.id,
+        startedAt: testSession.createdAt.toISOString(),
+        steps: [],
+        targetUrl: testSession.targetUrl,
+        verdict: (lastFinding?.verdict as any) ?? undefined,
+      };
+    }
+
     return Response.json({
+      execution,
       session: {
         browserSessionId: testSession.browserSessionId,
         chatId: testSession.chatId,
@@ -146,6 +187,9 @@ export async function DELETE(request: Request) {
   }
 
   try {
+    await ExecutionTracker.cancelRun({ chatId }).catch((err) => {
+      console.warn("[QA Session API] Error cancelling execution run:", err);
+    });
     const result = await stopBrowserSession({ chatId });
     return Response.json(result);
   } catch (error) {

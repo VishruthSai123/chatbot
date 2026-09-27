@@ -46,6 +46,7 @@ import {
 } from "@/lib/db/queries";
 import type { DBMessage } from "@/lib/db/schema";
 import { ChatbotError } from "@/lib/errors";
+import { ExecutionTracker } from "@/lib/qa/execution-tracker";
 import { checkIpRateLimit } from "@/lib/ratelimit";
 import type { ChatMessage, WaitingStatusData } from "@/lib/types";
 import { convertToUIMessages, generateUUID } from "@/lib/utils";
@@ -303,6 +304,7 @@ export async function POST(request: Request) {
           model: getLanguageModel(chatModel),
           onAbort() {
             stopWaitingStatus();
+            ExecutionTracker.cancelRun({ chatId: id }).catch(() => null);
           },
           onChunk({ chunk }) {
             if (isModelStreamActivity(chunk)) {
@@ -312,8 +314,15 @@ export async function POST(request: Request) {
           onEnd() {
             stopWaitingStatus();
           },
-          onError() {
+          onError({ error }: { error?: unknown }) {
             stopWaitingStatus();
+            ExecutionTracker.failRun({
+              chatId: id,
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Stream processing error",
+            });
           },
           providerOptions: {
             ...(modelConfig?.gatewayOrder && {
@@ -345,7 +354,7 @@ export async function POST(request: Request) {
               modelId: chatModel,
               session,
             }),
-            runBrowserStep: runBrowserStep({ dataStream }),
+            runBrowserStep: runBrowserStep({ chatId: id, dataStream }),
             startTestSession: startTestSession({
               browserDimensions,
               chatId: id,

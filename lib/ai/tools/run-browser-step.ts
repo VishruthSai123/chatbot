@@ -1,22 +1,53 @@
 import { tool, type UIMessageStreamWriter } from "ai";
 import { z } from "zod";
 import { runBrowserTask } from "@/lib/browser-use/session";
+import { ExecutionTracker } from "@/lib/qa/execution-tracker";
 import type { ChatMessage } from "@/lib/types";
 
 type RunBrowserStepProps = {
+  chatId: string;
   dataStream: UIMessageStreamWriter<ChatMessage>;
 };
 
-export const runBrowserStep = ({ dataStream }: RunBrowserStepProps) =>
+export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
   tool({
     description:
       "Execute a browser task through Browser Use on an active session. Provide a clear, specific instruction of what to do in the browser. The browser session must already exist (call startTestSession first). Returns the execution result including success status and output.",
     execute: async ({ browserSessionId, instruction }) => {
       try {
+        const initialAction = `Executing: ${instruction.slice(0, 120)}`;
         dataStream.write({
-          data: `Executing: ${instruction.slice(0, 120)}...`,
+          data: `${initialAction}...`,
           transient: true,
           type: "data-qa-status",
+        });
+
+        // Ensure run is active in tracker
+        let activeRun = ExecutionTracker.getActiveRun(chatId);
+        if (!activeRun) {
+          activeRun = ExecutionTracker.startRun({
+            browserSessionId,
+            chatId,
+            sessionId: browserSessionId,
+            targetUrl: "https://localhost",
+          });
+        }
+
+        // Stream initial running state
+        dataStream.write({
+          data: {
+            currentAction: initialAction,
+            currentStep: activeRun.currentStep ?? 1,
+            executionState: "RUNNING",
+            lastActivityAt: activeRun.lastActivityAt,
+            runId: activeRun.runId,
+            sequence: activeRun.sequence,
+            sessionId: activeRun.sessionId,
+            startedAt: activeRun.startedAt,
+            steps: activeRun.steps,
+          },
+          transient: true,
+          type: "data-qa-execution",
         });
 
         let stepCount = 0;
@@ -26,7 +57,6 @@ export const runBrowserStep = ({ dataStream }: RunBrowserStepProps) =>
           onStep: (step) => {
             stepCount += 1;
 
-            // Extract action description from the step object safely
             const actionText =
               (step as any).nextGoal ??
               (step as any).evaluationPreviousGoal ??
@@ -36,12 +66,22 @@ export const runBrowserStep = ({ dataStream }: RunBrowserStepProps) =>
             const urlText =
               (step as any).url ?? (step as any).currentUrl ?? undefined;
 
+            const safeAction =
+              typeof actionText === "string" ? actionText : String(actionText);
+
+            // Update authoritative execution tracker
+            const updatedRun = ExecutionTracker.updateStep({
+              action: safeAction,
+              chatId,
+              number: stepCount,
+              status: "running",
+              url: urlText,
+            });
+
+            // Stream step delta
             dataStream.write({
               data: {
-                action:
-                  typeof actionText === "string"
-                    ? actionText
-                    : String(actionText),
+                action: safeAction,
                 number: stepCount,
                 status: "running" as const,
                 url: urlText,
@@ -49,11 +89,44 @@ export const runBrowserStep = ({ dataStream }: RunBrowserStepProps) =>
               transient: true,
               type: "data-qa-step",
             });
+
+            // Stream full execution snapshot
+            if (updatedRun) {
+              dataStream.write({
+                data: {
+                  currentAction: safeAction,
+                  currentStep: stepCount,
+                  executionState: "RUNNING",
+                  lastActivityAt: updatedRun.lastActivityAt,
+                  runId: updatedRun.runId,
+                  sequence: updatedRun.sequence,
+                  sessionId: updatedRun.sessionId,
+                  startedAt: updatedRun.startedAt,
+                  steps: updatedRun.steps,
+                },
+                transient: true,
+                type: "data-qa-execution",
+              });
+            }
+          },
+          onTaskId: (taskId) => {
+            if (activeRun) {
+              ExecutionTracker.setActiveTaskId(chatId, activeRun.runId, taskId);
+            }
           },
           sessionId: browserSessionId,
         });
 
-        // Write final status
+        // Mark current sub-step and overall execution as WAITING for verification
+        const waitingAction = result.isSuccess
+          ? "Browser action completed. Analyzing outcome..."
+          : "Browser action finished with warnings. Verifying state...";
+
+        const waitingRun = ExecutionTracker.recordWaiting({
+          chatId,
+          currentAction: waitingAction,
+        });
+
         dataStream.write({
           data: {
             action: result.isSuccess
@@ -66,6 +139,24 @@ export const runBrowserStep = ({ dataStream }: RunBrowserStepProps) =>
           type: "data-qa-step",
         });
 
+        if (waitingRun) {
+          dataStream.write({
+            data: {
+              currentAction: waitingAction,
+              currentStep: stepCount,
+              executionState: "WAITING",
+              lastActivityAt: waitingRun.lastActivityAt,
+              runId: waitingRun.runId,
+              sequence: waitingRun.sequence,
+              sessionId: waitingRun.sessionId,
+              startedAt: waitingRun.startedAt,
+              steps: waitingRun.steps,
+            },
+            transient: true,
+            type: "data-qa-execution",
+          });
+        }
+
         return {
           output: result.output,
           stepCount: result.steps.length,
@@ -75,12 +166,41 @@ export const runBrowserStep = ({ dataStream }: RunBrowserStepProps) =>
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unknown browser error";
+        const isTimeout =
+          message.toLowerCase().includes("timeout") ||
+          message.toLowerCase().includes("did not complete within");
+
+        const failedRun = ExecutionTracker.failRun({
+          chatId,
+          error: message,
+          state: isTimeout ? "TIMED_OUT" : "FAILED",
+        });
 
         dataStream.write({
           data: `Browser task error: ${message}`,
           transient: true,
           type: "data-qa-status",
         });
+
+        if (failedRun) {
+          dataStream.write({
+            data: {
+              currentAction: isTimeout
+                ? "Task timed out"
+                : `Failed: ${message}`,
+              error: message,
+              executionState: isTimeout ? "TIMED_OUT" : "FAILED",
+              lastActivityAt: failedRun.lastActivityAt,
+              runId: failedRun.runId,
+              sequence: failedRun.sequence,
+              sessionId: failedRun.sessionId,
+              startedAt: failedRun.startedAt,
+              steps: failedRun.steps,
+            },
+            transient: true,
+            type: "data-qa-execution",
+          });
+        }
 
         return {
           error: message,

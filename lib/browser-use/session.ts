@@ -34,7 +34,9 @@ export interface ActiveBrowserSession {
 export interface RunBrowserTaskOptions {
   instruction: string;
   onStep?: (step: TaskStepView) => void | Promise<void>;
+  onTaskId?: (taskId: string) => void;
   sessionId: string;
+  timeoutMs?: number;
 }
 
 export interface RunBrowserTaskResult {
@@ -179,33 +181,60 @@ export async function runBrowserTask({
   sessionId,
   instruction,
   onStep,
+  onTaskId,
+  timeoutMs = 75_000,
 }: RunBrowserTaskOptions): Promise<RunBrowserTaskResult> {
   const client = getBrowserUseClient();
-  const taskRun = client.run(instruction, { sessionId });
+  const taskRun = client.run(instruction, {
+    sessionId,
+    timeout: timeoutMs,
+  });
   const steps: TaskStepView[] = [];
 
-  for await (const step of taskRun) {
-    steps.push(step);
-    if (onStep) {
-      try {
-        await onStep(step);
-      } catch (err) {
-        console.error("[BrowserUse] Error in onStep handler:", err);
+  let recordedTaskId: string | null = null;
+  const checkTaskId = () => {
+    if (!recordedTaskId && taskRun.taskId) {
+      recordedTaskId = taskRun.taskId;
+      onTaskId?.(recordedTaskId);
+    }
+  };
+
+  try {
+    for await (const step of taskRun) {
+      checkTaskId();
+      steps.push(step);
+      if (onStep) {
+        try {
+          await onStep(step);
+        } catch (err) {
+          console.error("[BrowserUse] Error in onStep handler:", err);
+        }
       }
     }
+
+    checkTaskId();
+    const result = await taskRun;
+
+    return {
+      isSuccess: result.isSuccess ?? null,
+      output:
+        typeof result.output === "string"
+          ? result.output
+          : JSON.stringify(result.output ?? ""),
+      steps,
+      taskId: recordedTaskId || taskRun.taskId,
+    };
+  } catch (error) {
+    // If the task timed out or failed, attempt to stop remote task execution
+    if (taskRun.taskId) {
+      try {
+        await client.tasks.stop(taskRun.taskId);
+      } catch {
+        /* non-fatal */
+      }
+    }
+    throw error;
   }
-
-  const result = await taskRun;
-
-  return {
-    isSuccess: result.isSuccess ?? null,
-    output:
-      typeof result.output === "string"
-        ? result.output
-        : JSON.stringify(result.output ?? ""),
-    steps,
-    taskId: taskRun.taskId,
-  };
 }
 
 /**

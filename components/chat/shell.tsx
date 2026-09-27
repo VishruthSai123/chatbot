@@ -58,7 +58,7 @@ export function ChatShell() {
   const isBrowser = artifact.kind === "browser";
   const isFullscreen = Boolean(metadata?.isFullscreen);
 
-  // Restore active browser session on page load/refresh
+  // Restore active browser session and execution state on page load/refresh
   const { data: sessionData } = useSWR<{
     session: {
       id: string;
@@ -67,6 +67,7 @@ export function ChatShell() {
       targetUrl: string;
       status: string;
     } | null;
+    execution: any;
   }>(chatId ? `/api/qa/session?chatId=${chatId}` : null, fetcher, {
     revalidateOnFocus: false,
   });
@@ -74,11 +75,8 @@ export function ChatShell() {
   const hasRestoredSessionRef = useRef<string | null>(null);
   useEffect(() => {
     const s = sessionData?.session;
-    if (
-      s?.liveUrl &&
-      s.status === "active" &&
-      hasRestoredSessionRef.current !== s.id
-    ) {
+    const exec = sessionData?.execution;
+    if (s?.liveUrl && hasRestoredSessionRef.current !== s.id) {
       hasRestoredSessionRef.current = s.id;
       setArtifact((prev) => {
         if (prev.isVisible) {
@@ -89,7 +87,7 @@ export function ChatShell() {
           documentId: s.id,
           isVisible: true,
           kind: "browser",
-          status: "idle",
+          status: s.status === "active" ? "streaming" : "idle",
           title: s.targetUrl || "Live Browser",
         };
       });
@@ -97,8 +95,19 @@ export function ChatShell() {
         ...prev,
         browserSessionId: s.browserSessionId,
         liveUrl: s.liveUrl ?? undefined,
-        status: "live",
+        status: s.status === "active" ? "live" : "idle",
         targetUrl: s.targetUrl,
+        ...(exec
+          ? {
+              currentAction: exec.currentAction,
+              executionState: exec.executionState,
+              findingId: exec.findingId,
+              recentSteps: exec.steps,
+              runId: exec.runId,
+              sequence: exec.sequence,
+              verdict: exec.verdict,
+            }
+          : {}),
       }));
     }
   }, [sessionData, setArtifact, setMetadata]);

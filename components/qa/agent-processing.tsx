@@ -8,6 +8,10 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { useArtifact } from "@/hooks/use-artifact";
+import {
+  type ExecutionStep,
+  isTerminalExecutionState,
+} from "@/lib/qa/execution-types";
 import { cn } from "@/lib/utils";
 import { Shimmer } from "../ai-elements/shimmer";
 
@@ -40,7 +44,7 @@ export const AgentProcessing = memo(
     );
     const startTimeRef = useRef<number | null>(null);
 
-    // Identify tool parts
+    // Identify tool parts from the message
     const startTestSessionPart = parts.find(
       (p) => p.type === "tool-startTestSession"
     );
@@ -74,10 +78,32 @@ export const AgentProcessing = memo(
           "error" in (p.output as Record<string, unknown>))
     );
 
-    const isError = Boolean(errorPart);
+    const execState = metadata?.executionState;
+    const isCanonicalTerminal = isTerminalExecutionState(execState);
+
+    const isError =
+      Boolean(errorPart) ||
+      execState === "FAILED" ||
+      execState === "TIMED_OUT" ||
+      Boolean(metadata?.errorMessage);
+
+    const isCancelled = execState === "CANCELLED";
+
+    // Overall running state:
+    // If the canonical state is terminal (COMPLETED, FAILED, TIMED_OUT, CANCELLED),
+    // it is definitively NOT running, regardless of trailing HTTP stream chunks.
     const isAnyRunning =
       !isError &&
-      (isLoading || isStartRunning || isRunStepRunning || isEvalRunning);
+      !isCancelled &&
+      !isCanonicalTerminal &&
+      (isLoading ||
+        isStartRunning ||
+        isRunStepRunning ||
+        isEvalRunning ||
+        execState === "STARTING" ||
+        execState === "RUNNING" ||
+        execState === "WAITING" ||
+        execState === "FINALIZING");
 
     // Track active execution duration
     useEffect(() => {
@@ -114,14 +140,16 @@ export const AgentProcessing = memo(
       };
     }, [isAnyRunning]);
 
-    // Build Action Items
+    // Build Action Items (integrating fine-grained Browser Use sub-steps)
     const actions: ActionItem[] = useMemo(() => {
       const items: ActionItem[] = [];
 
+      // 1. Session Initialization
       if (startTestSessionPart) {
         const targetUrl =
           startTestSessionPart.input?.targetUrl ||
-          startTestSessionPart.output?.targetUrl;
+          startTestSessionPart.output?.targetUrl ||
+          metadata?.targetUrl;
         const isPartError =
           startTestSessionPart.state === "output-error" ||
           Boolean(startTestSessionPart.output?.error);
@@ -132,7 +160,7 @@ export const AgentProcessing = memo(
             : undefined,
           id: startTestSessionPart.toolCallId || "start-session",
           label: targetUrl
-            ? `Navigate to ${targetUrl}`
+            ? `Connect to ${targetUrl}`
             : "Connect to browser session",
           status:
             startTestSessionPart.state === "output-available" && !isPartError
@@ -143,44 +171,72 @@ export const AgentProcessing = memo(
         });
       }
 
-      runBrowserStepParts.forEach((stepPart, idx) => {
-        const instruction =
-          stepPart.input?.instruction || "Execute browser task";
-        const stepCount = stepPart.output?.stepCount;
-        const isPartError =
-          stepPart.state === "output-error" || Boolean(stepPart.output?.error);
+      // 2. Real Browser Use Cloud Sub-Steps (if available) or tool calls
+      const recentSteps: ExecutionStep[] =
+        (metadata?.recentSteps as ExecutionStep[]) || [];
+      if (recentSteps.length > 0) {
+        for (const subStep of recentSteps) {
+          items.push({
+            error: subStep.status === "failed" ? subStep.action : undefined,
+            id: `substep-${subStep.number ?? subStep.action}`,
+            label: subStep.action,
+            status:
+              subStep.status === "completed"
+                ? "completed"
+                : subStep.status === "failed"
+                  ? "failed"
+                  : "running",
+          });
+        }
+      } else {
+        // Fallback to high-level tool parts if no sub-steps received yet
+        runBrowserStepParts.forEach((stepPart, idx) => {
+          const instruction =
+            stepPart.input?.instruction || "Execute browser task";
+          const stepCount = stepPart.output?.stepCount;
+          const isPartError =
+            stepPart.state === "output-error" ||
+            Boolean(stepPart.output?.error);
 
-        items.push({
-          error: isPartError
-            ? String(stepPart.output?.error || "Action failed")
-            : undefined,
-          id: stepPart.toolCallId || `step-${idx}`,
-          label:
-            stepCount && stepCount > 1
-              ? `${instruction} (${stepCount} steps)`
-              : instruction,
-          status:
-            stepPart.state === "output-available" && !isPartError
-              ? "completed"
-              : isPartError
-                ? "failed"
-                : "running",
+          items.push({
+            error: isPartError
+              ? String(stepPart.output?.error || "Action failed")
+              : undefined,
+            id: stepPart.toolCallId || `step-${idx}`,
+            label:
+              stepCount && stepCount > 1
+                ? `${instruction} (${stepCount} steps)`
+                : instruction,
+            status:
+              stepPart.state === "output-available" && !isPartError
+                ? "completed"
+                : isPartError
+                  ? "failed"
+                  : "running",
+          });
         });
-      });
+      }
 
-      if (evaluateTestResultPart) {
+      // 3. Evaluation & Assertion Step
+      if (
+        evaluateTestResultPart ||
+        execState === "FINALIZING" ||
+        execState === "COMPLETED"
+      ) {
         const isPartError =
-          evaluateTestResultPart.state === "output-error" ||
-          Boolean(evaluateTestResultPart.output?.error);
+          evaluateTestResultPart?.state === "output-error" ||
+          Boolean(evaluateTestResultPart?.output?.error);
 
         items.push({
           error: isPartError
-            ? String(evaluateTestResultPart.output?.error)
+            ? String(evaluateTestResultPart?.output?.error)
             : undefined,
-          id: evaluateTestResultPart.toolCallId || "eval-result",
+          id: evaluateTestResultPart?.toolCallId || "eval-result",
           label: "Verify test outcome & record findings",
           status:
-            evaluateTestResultPart.state === "output-available" && !isPartError
+            (evaluateTestResultPart?.state === "output-available" ||
+              execState === "COMPLETED") &&
+            !isPartError
               ? "completed"
               : isPartError
                 ? "failed"
@@ -189,31 +245,49 @@ export const AgentProcessing = memo(
       }
 
       return items;
-    }, [startTestSessionPart, runBrowserStepParts, evaluateTestResultPart]);
+    }, [
+      startTestSessionPart,
+      runBrowserStepParts,
+      evaluateTestResultPart,
+      metadata?.recentSteps,
+      metadata?.targetUrl,
+      execState,
+    ]);
 
-    // Descriptive live summary text
+    // Descriptive live summary text projected from canonical state
     const activeDescription = useMemo(() => {
+      if (isCancelled) {
+        return "Test was stopped by user.";
+      }
+
+      if (execState === "TIMED_OUT") {
+        return "Test timed out before completion.";
+      }
+
       if (isError) {
         const errMessage =
-          errorPart?.output && typeof errorPart.output === "object"
+          metadata?.errorMessage ||
+          (errorPart?.output && typeof errorPart.output === "object"
             ? (errorPart.output as Record<string, unknown>).error
-            : null;
+            : null);
         return errMessage
           ? `Couldn't complete the browser test: ${String(errMessage)}`
           : "Couldn't complete the browser test.";
       }
 
-      if (isStartRunning) {
-        const target = startTestSessionPart?.input?.targetUrl;
+      // 1. Initial Starting phase
+      if (isStartRunning || execState === "STARTING") {
+        const target =
+          startTestSessionPart?.input?.targetUrl || metadata?.targetUrl;
         return target
-          ? `I'm opening ${target}...`
-          : "I'm opening the application...";
+          ? `Opening ${target}...`
+          : "Connecting to browser session...";
       }
 
-      if (isRunStepRunning) {
-        // Prefer live streaming current action if available
+      // 2. Active Browser Step Execution phase
+      if (isRunStepRunning || execState === "RUNNING") {
         if (metadata?.currentAction) {
-          return `I'm ${metadata.currentAction.toLowerCase()}...`;
+          return `${metadata.currentAction}...`;
         }
 
         const activeStep = runBrowserStepParts.find(
@@ -223,32 +297,56 @@ export const AgentProcessing = memo(
         if (instruction) {
           const lower = instruction.toLowerCase().trim();
           if (lower.startsWith("test") || lower.startsWith("check")) {
-            return `I'm ${lower}...`;
+            return `${lower}...`;
           }
-          return `I'm executing: ${instruction}...`;
+          return `Executing: ${instruction}...`;
         }
-        return "I'm testing the application...";
+        return "Testing the application in live browser...";
       }
 
-      if (isEvalRunning) {
-        return "I'm verifying the result...";
+      // 3. Waiting / Analyzing Phase (Browser action completed, awaiting assertions)
+      if (execState === "WAITING") {
+        return (
+          metadata?.currentAction ||
+          "Analyzing browser outcome and verifying state..."
+        );
       }
 
+      // 4. Finalizing / Verification Phase
+      if (isEvalRunning || execState === "FINALIZING") {
+        return "Verifying assertions and recording findings...";
+      }
+
+      // 5. Completed Phase
       if (evaluateTestResultPart?.output?.title) {
-        return `Completed verification: ${evaluateTestResultPart.output.title}`;
+        return `Verification complete: ${evaluateTestResultPart.output.title}`;
+      }
+
+      if (execState === "COMPLETED") {
+        return "Test execution completed.";
+      }
+
+      // 6. Streaming continuation fallback (never premature 'Test completed')
+      if (isLoading) {
+        return "Finalizing test summary...";
       }
 
       return "Test completed.";
     }, [
+      isCancelled,
+      execState,
       isError,
       isStartRunning,
       isRunStepRunning,
       isEvalRunning,
+      isLoading,
       errorPart,
+      metadata?.errorMessage,
+      metadata?.targetUrl,
+      metadata?.currentAction,
       startTestSessionPart,
       runBrowserStepParts,
       evaluateTestResultPart,
-      metadata?.currentAction,
     ]);
 
     // Duration formatting

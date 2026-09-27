@@ -4,7 +4,9 @@ import {
   createTestSession,
   getTestSessionByChatId,
   saveQAFinding,
+  updateTestSessionStatus,
 } from "@/lib/db/queries";
+import { ExecutionTracker } from "@/lib/qa/execution-tracker";
 import type { ChatMessage } from "@/lib/types";
 
 type EvaluateTestResultProps = {
@@ -31,6 +33,9 @@ export const evaluateTestResult = ({
       severity,
     }) => {
       try {
+        // Transition tracker to FINALIZING
+        ExecutionTracker.recordFinalizing({ chatId });
+
         // Resolve a valid DB TestSession ID
         let resolvedTestSessionId: string | null = null;
         const existingSession = await getTestSessionByChatId({ chatId });
@@ -64,6 +69,24 @@ export const evaluateTestResult = ({
           verdict: status === "blocked" ? "uncertain" : status,
         });
 
+        // Authoritatively update DB TestSession status
+        await updateTestSessionStatus({
+          id: resolvedTestSessionId,
+          status: "completed",
+        }).catch((err) => {
+          console.warn(
+            "[evaluateTestResult] Error updating session status to completed:",
+            err
+          );
+        });
+
+        // Mark execution complete in tracker
+        const completedRun = ExecutionTracker.completeRun({
+          chatId,
+          findingId: finding?.id ?? null,
+          verdict: status,
+        });
+
         // Stream finding to the client for rich UI rendering
         dataStream.write({
           data: {
@@ -81,6 +104,28 @@ export const evaluateTestResult = ({
           type: "data-qa-finding",
         });
 
+        // Stream final canonical execution state
+        if (completedRun) {
+          dataStream.write({
+            data: {
+              completedAt: completedRun.completedAt,
+              currentAction: "Test completed",
+              currentStep: completedRun.currentStep,
+              executionState: "COMPLETED",
+              findingId: finding?.id ?? null,
+              lastActivityAt: completedRun.lastActivityAt,
+              runId: completedRun.runId,
+              sequence: completedRun.sequence,
+              sessionId: completedRun.sessionId,
+              startedAt: completedRun.startedAt,
+              steps: completedRun.steps,
+              verdict: status,
+            },
+            transient: true,
+            type: "data-qa-execution",
+          });
+        }
+
         return {
           actual,
           evidence: evidence ?? [],
@@ -95,6 +140,27 @@ export const evaluateTestResult = ({
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Evaluation error";
+        ExecutionTracker.failRun({
+          chatId,
+          error: message,
+          state: "FAILED",
+        });
+
+        dataStream.write({
+          data: {
+            currentAction: `Evaluation error: ${message}`,
+            error: message,
+            executionState: "FAILED",
+            lastActivityAt: new Date().toISOString(),
+            runId: "error",
+            sequence: 999,
+            sessionId: "",
+            startedAt: new Date().toISOString(),
+          },
+          transient: true,
+          type: "data-qa-execution",
+        });
+
         return {
           actual,
           error: message,

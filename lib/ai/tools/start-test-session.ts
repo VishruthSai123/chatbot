@@ -2,6 +2,7 @@ import { tool, type UIMessageStreamWriter } from "ai";
 import type { Session } from "next-auth";
 import { z } from "zod";
 import { getOrCreateBrowserSession } from "@/lib/browser-use/session";
+import { ExecutionTracker } from "@/lib/qa/execution-tracker";
 import type { ChatMessage } from "@/lib/types";
 
 type StartTestSessionProps = {
@@ -34,6 +35,13 @@ export const startTestSession = ({
           targetUrl,
         });
 
+        const run = ExecutionTracker.startRun({
+          browserSessionId: browserSession.browserSessionId,
+          chatId,
+          sessionId: browserSession.id,
+          targetUrl: browserSession.targetUrl,
+        });
+
         // Push standard artifact initiation parts
         dataStream.write({
           data: "browser",
@@ -53,7 +61,7 @@ export const startTestSession = ({
           type: "data-title",
         });
 
-        // Push session data to the client — this triggers the browser artifact pane to open
+        // Push session data to the client — triggers browser artifact pane to open
         dataStream.write({
           data: {
             browserSessionId: browserSession.browserSessionId,
@@ -66,9 +74,27 @@ export const startTestSession = ({
           type: "data-browser-session",
         });
 
+        // Stream authoritative execution state
+        dataStream.write({
+          data: {
+            currentAction: "Connected to live browser session",
+            currentStep: 0,
+            executionState: "STARTING",
+            lastActivityAt: run.lastActivityAt,
+            runId: run.runId,
+            sequence: run.sequence,
+            sessionId: browserSession.id,
+            startedAt: run.startedAt,
+            steps: run.steps,
+          },
+          transient: true,
+          type: "data-qa-execution",
+        });
+
         return {
           browserSessionId: browserSession.browserSessionId,
           liveUrl: browserSession.liveUrl,
+          runId: run.runId,
           sessionId: browserSession.id,
           status: browserSession.isExisting ? "reused" : "created",
           targetUrl: browserSession.targetUrl,
@@ -76,11 +102,33 @@ export const startTestSession = ({
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unknown error";
+        ExecutionTracker.failRun({
+          chatId,
+          error: message,
+          state: "FAILED",
+        });
+
         dataStream.write({
           data: `Browser session failed: ${message}`,
           transient: true,
           type: "data-qa-status",
         });
+
+        dataStream.write({
+          data: {
+            currentAction: `Connection failed: ${message}`,
+            error: message,
+            executionState: "FAILED",
+            lastActivityAt: new Date().toISOString(),
+            runId: "error",
+            sequence: 999,
+            sessionId: "",
+            startedAt: new Date().toISOString(),
+          },
+          transient: true,
+          type: "data-qa-execution",
+        });
+
         return {
           error: message,
           status: "error",

@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useActiveChat } from "@/hooks/use-active-chat";
 import { useArtifact } from "@/hooks/use-artifact";
+import type { CanonicalExecutionState } from "@/lib/qa/execution-types";
 import { cn, fetcher } from "@/lib/utils";
 import { Shimmer } from "../ai-elements/shimmer";
 
@@ -38,6 +39,11 @@ export type BrowserArtifactMetadata = {
   targetUrl?: string;
   currentUrl?: string;
   status?: BrowserStatus;
+  executionState?: CanonicalExecutionState;
+  runId?: string;
+  sequence?: number;
+  verdict?: "pass" | "fail" | "uncertain" | "blocked";
+  findingId?: string | null;
   currentAction?: string;
   recentSteps?: Array<{
     number?: number;
@@ -123,14 +129,16 @@ export function BrowserPreview({
       targetUrl: string;
       status: string;
     } | null;
+    execution: any;
   }>(sessionQuery, fetcher, {
     revalidateOnFocus: false,
   });
 
-  // Sync DB session into metadata if found
+  // Sync DB session and execution into metadata if found
   useEffect(() => {
     if (sessionData?.session?.liveUrl && setMetadata) {
       const s = sessionData.session;
+      const exec = sessionData.execution;
       setMetadata((prev) => ({
         ...prev,
         browserSessionId: s.browserSessionId,
@@ -139,6 +147,18 @@ export function BrowserPreview({
           (s.status === "active" ? "live" : (s.status as BrowserStatus)) ??
           "live",
         targetUrl: s.targetUrl,
+        ...(exec
+          ? {
+              currentAction: exec.currentAction || prev.currentAction,
+              errorMessage: exec.error || prev.errorMessage,
+              executionState: exec.executionState || prev.executionState,
+              findingId: exec.findingId || prev.findingId,
+              recentSteps: exec.steps || prev.recentSteps,
+              runId: exec.runId || prev.runId,
+              sequence: exec.sequence || prev.sequence,
+              verdict: exec.verdict || prev.verdict,
+            }
+          : {}),
       }));
     }
   }, [sessionData, setMetadata]);
@@ -152,7 +172,14 @@ export function BrowserPreview({
   const rawStatus =
     metadata?.status ??
     (liveUrl ? "live" : isSessionFetching ? "connecting" : "idle");
-  const status: BrowserStatus = sessionFetchError ? "error" : rawStatus;
+  const status: BrowserStatus =
+    metadata?.executionState === "TIMED_OUT" ||
+    metadata?.executionState === "FAILED" ||
+    sessionFetchError
+      ? "error"
+      : metadata?.executionState === "CANCELLED"
+        ? "stopped"
+        : rawStatus;
   const isFullscreen = Boolean(metadata?.isFullscreen);
 
   const handleToggleFullscreen = useCallback(() => {
@@ -187,6 +214,7 @@ export function BrowserPreview({
       setMetadata?.((prev) => ({
         ...prev,
         currentAction: "Session stopped by user",
+        executionState: "CANCELLED",
         status: "stopped",
       }));
     } catch (err) {
