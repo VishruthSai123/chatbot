@@ -60,6 +60,33 @@ function extractChatId(pathname: string): string | null {
   return match ? match[1] : null;
 }
 
+export function computeInitialBrowserDimensions(): {
+  width: number;
+  height: number;
+} | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const isMobile = window.innerWidth < 768;
+  const isSm = window.innerWidth >= 640;
+  const horizontalPadding = isSm ? 20 : 16;
+  const verticalPadding = isSm ? 20 : 16;
+  const headerHeight = 44;
+
+  const width = isMobile
+    ? Math.round(window.innerWidth - horizontalPadding)
+    : Math.round(window.innerWidth * 0.6 - horizontalPadding);
+  const height = Math.round(
+    window.innerHeight - headerHeight - verticalPadding
+  );
+
+  return {
+    height: Math.max(360, height),
+    width: Math.max(360, width),
+  };
+}
+
 export function ActiveChatProvider({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { setDataStream, setWaitingStatus } = useDataStream();
@@ -88,10 +115,19 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   const [browserDimensions, setBrowserDimensions] = useState<{
     width: number;
     height: number;
-  } | null>(null);
+  } | null>(() => computeInitialBrowserDimensions());
   const browserDimensionsRef = useRef(browserDimensions);
   useEffect(() => {
     browserDimensionsRef.current = browserDimensions;
+  }, [browserDimensions]);
+
+  useEffect(() => {
+    if (!browserDimensions && typeof window !== "undefined") {
+      const initial = computeInitialBrowserDimensions();
+      if (initial) {
+        setBrowserDimensions(initial);
+      }
+    }
   }, [browserDimensions]);
 
   const { data: chatData, isLoading } = useSWR(
@@ -172,13 +208,16 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
             })
           );
 
+        const effectiveDimensions =
+          browserDimensionsRef.current ?? computeInitialBrowserDimensions();
+
         return {
           body: {
             id: request.id,
             ...(isToolApprovalContinuation
               ? { messages: request.messages }
               : { message: lastMessage }),
-            browserDimensions: browserDimensionsRef.current ?? undefined,
+            browserDimensions: effectiveDimensions ?? undefined,
             selectedChatModel: currentModelIdRef.current,
             selectedVisibilityType: visibility,
             ...request.body,

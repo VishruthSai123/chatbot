@@ -64,6 +64,8 @@ export const startTestSession = ({
         // Push session data to the client — triggers browser artifact pane to open
         dataStream.write({
           data: {
+            browserScreenHeight: browserSession.browserScreenHeight,
+            browserScreenWidth: browserSession.browserScreenWidth,
             browserSessionId: browserSession.browserSessionId,
             id: browserSession.id,
             liveUrl: browserSession.liveUrl ?? "",

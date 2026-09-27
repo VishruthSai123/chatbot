@@ -23,6 +23,8 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
         const session = streamPart.data;
         setMetadata((prev) => ({
           ...prev,
+          browserScreenHeight: session.browserScreenHeight,
+          browserScreenWidth: session.browserScreenWidth,
           browserSessionId: session.browserSessionId,
           liveUrl: session.liveUrl,
           sessionId: session.id,

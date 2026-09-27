@@ -24,6 +24,8 @@ function isSameTarget(urlA: string, urlB: string): boolean {
 }
 
 export interface ActiveBrowserSession {
+  browserScreenHeight?: number;
+  browserScreenWidth?: number;
   browserSessionId: string;
   id: string;
   isExisting: boolean;
@@ -53,7 +55,7 @@ export async function getOrCreateBrowserSession({
   chatId,
   targetUrl,
   projectId,
-  browserScreenWidth = 1024,
+  browserScreenWidth,
   browserScreenHeight,
 }: {
   chatId: string;
@@ -82,6 +84,10 @@ export async function getOrCreateBrowserSession({
         );
         if (liveSession && liveSession.status === "active") {
           return {
+            browserScreenHeight:
+              (liveSession as any).browserScreenHeight ?? browserScreenHeight,
+            browserScreenWidth:
+              (liveSession as any).browserScreenWidth ?? browserScreenWidth,
             browserSessionId: existing.browserSessionId,
             id: existing.id,
             isExisting: true,
@@ -126,11 +132,16 @@ export async function getOrCreateBrowserSession({
   }
 
   // Adaptive screen sizing:
-  // Default to 1024px width and 830px height (aspect ratio ~1.234)
-  // matching the workspace panel dimensions (60% split on desktop/laptop displays).
-  const finalWidth = browserScreenWidth ?? 1024;
-  const finalHeight =
-    browserScreenHeight ?? Math.round(finalWidth * (830 / 1024));
+  // Dynamically use the pre-computed dimensions matching the user's screen ratio.
+  // Fall back to 1024x830 (aspect ratio ~1.234) if omitted.
+  let finalWidth = browserScreenWidth ? Math.round(browserScreenWidth) : 1024;
+  let finalHeight = browserScreenHeight
+    ? Math.round(browserScreenHeight)
+    : Math.round(finalWidth * (830 / 1024));
+
+  // Clamp within safe browser limits (min 360px, max 3840px / 2160px)
+  finalWidth = Math.min(Math.max(finalWidth, 360), 3840);
+  finalHeight = Math.min(Math.max(finalHeight, 360), 2160);
 
   // 2. Spawn a new session on Browser Use Cloud
   console.log(
@@ -165,6 +176,8 @@ export async function getOrCreateBrowserSession({
   });
 
   return {
+    browserScreenHeight: finalHeight,
+    browserScreenWidth: finalWidth,
     browserSessionId,
     id: created.id,
     isExisting: false,

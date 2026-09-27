@@ -39,6 +39,8 @@ export async function GET(request: Request) {
     let currentStatus = initialStatus;
     let liveUrl = initialLiveUrl;
 
+    let cloudScreenWidth: number | undefined;
+    let cloudScreenHeight: number | undefined;
     if (testSession.browserSessionId && testSession.status === "active") {
       try {
         const client = getBrowserUseClient();
@@ -51,14 +53,20 @@ export async function GET(request: Request) {
             id: testSession.id,
             status: "completed",
           });
-        } else if (cloudSession?.liveUrl && cloudSession.liveUrl !== liveUrl) {
-          const { liveUrl: cloudLiveUrl } = cloudSession;
-          liveUrl = cloudLiveUrl;
-          await updateTestSessionStatus({
-            id: testSession.id,
-            liveUrl,
-            status: "active",
-          });
+        } else if (cloudSession) {
+          cloudScreenWidth =
+            (cloudSession as any).browserScreenWidth ?? undefined;
+          cloudScreenHeight =
+            (cloudSession as any).browserScreenHeight ?? undefined;
+          if (cloudSession.liveUrl && cloudSession.liveUrl !== liveUrl) {
+            const { liveUrl: cloudLiveUrl } = cloudSession;
+            liveUrl = cloudLiveUrl;
+            await updateTestSessionStatus({
+              id: testSession.id,
+              liveUrl,
+              status: "active",
+            });
+          }
         }
       } catch {
         currentStatus = "completed";
@@ -110,6 +118,8 @@ export async function GET(request: Request) {
     return Response.json({
       execution,
       session: {
+        browserScreenHeight: cloudScreenHeight,
+        browserScreenWidth: cloudScreenWidth,
         browserSessionId: testSession.browserSessionId,
         chatId: testSession.chatId,
         id: testSession.id,

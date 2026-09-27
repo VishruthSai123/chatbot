@@ -35,6 +35,8 @@ export type BrowserStatus =
 export type BrowserArtifactMetadata = {
   sessionId?: string;
   browserSessionId?: string;
+  browserScreenHeight?: number;
+  browserScreenWidth?: number;
   liveUrl?: string;
   targetUrl?: string;
   currentUrl?: string;
@@ -71,18 +73,19 @@ export function BrowserPreview({
   setMetadata,
   title,
 }: BrowserPreviewProps) {
-  const { chatId, setBrowserDimensions } = useActiveChat();
+  const { chatId, browserDimensions, setBrowserDimensions } = useActiveChat();
   const { setArtifact } = useArtifact();
   const [iframeKey] = useState<number>(0);
   const [isStopping, setIsStopping] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [containerDimensions, setContainerDimensions] = useState<{
+  const [wrapperDimensions, setWrapperDimensions] = useState<{
     width: number;
     height: number;
   } | null>(null);
 
   useEffect(() => {
-    if (!containerRef.current) {
+    if (!wrapperRef.current) {
       return;
     }
     const ro = new ResizeObserver((entries) => {
@@ -93,12 +96,12 @@ export function BrowserPreview({
             height: Math.round(height),
             width: Math.round(width),
           };
-          setContainerDimensions(dims);
+          setWrapperDimensions(dims);
           setBrowserDimensions?.(dims);
         }
       }
     });
-    ro.observe(containerRef.current);
+    ro.observe(wrapperRef.current);
     return () => ro.disconnect();
   }, [setBrowserDimensions]);
 
@@ -109,12 +112,12 @@ export function BrowserPreview({
       return null;
     }
     const params = new URLSearchParams({ chatId: chatId ?? "" });
-    if (containerDimensions) {
-      params.set("width", String(containerDimensions.width));
-      params.set("height", String(containerDimensions.height));
+    if (wrapperDimensions) {
+      params.set("width", String(wrapperDimensions.width));
+      params.set("height", String(wrapperDimensions.height));
     }
     return `/api/qa/session?${params.toString()}`;
-  }, [shouldFetchSession, chatId, containerDimensions]);
+  }, [shouldFetchSession, chatId, wrapperDimensions]);
 
   const {
     data: sessionData,
@@ -125,6 +128,8 @@ export function BrowserPreview({
     session: {
       id: string;
       browserSessionId: string;
+      browserScreenHeight?: number;
+      browserScreenWidth?: number;
       liveUrl: string | null;
       targetUrl: string;
       status: string;
@@ -141,6 +146,8 @@ export function BrowserPreview({
       const exec = sessionData.execution;
       setMetadata((prev) => ({
         ...prev,
+        browserScreenHeight: s.browserScreenHeight ?? prev.browserScreenHeight,
+        browserScreenWidth: s.browserScreenWidth ?? prev.browserScreenWidth,
         browserSessionId: s.browserSessionId,
         liveUrl: s.liveUrl ?? undefined,
         status:
@@ -238,6 +245,62 @@ export function BrowserPreview({
       return title || "Live Browser";
     }
   }, [currentUrl, title]);
+
+  // Determine effective aspect ratio of the remote browser session
+  const activeAspectRatio = useMemo(() => {
+    if (metadata?.browserScreenWidth && metadata?.browserScreenHeight) {
+      return metadata.browserScreenWidth / metadata.browserScreenHeight;
+    }
+    if (
+      sessionData?.session?.browserScreenWidth &&
+      sessionData?.session?.browserScreenHeight
+    ) {
+      return (
+        sessionData.session.browserScreenWidth /
+        sessionData.session.browserScreenHeight
+      );
+    }
+    if (browserDimensions?.width && browserDimensions?.height) {
+      return browserDimensions.width / browserDimensions.height;
+    }
+    return 1024 / 830;
+  }, [
+    metadata?.browserScreenWidth,
+    metadata?.browserScreenHeight,
+    sessionData?.session?.browserScreenWidth,
+    sessionData?.session?.browserScreenHeight,
+    browserDimensions?.width,
+    browserDimensions?.height,
+  ]);
+
+  // Compute exact tight-bounding dimensions inside wrapper to guarantee zero letterbox gaps
+  const fittedDimensions = useMemo(() => {
+    if (
+      !liveUrl ||
+      !wrapperDimensions ||
+      wrapperDimensions.width <= 0 ||
+      wrapperDimensions.height <= 0
+    ) {
+      return null;
+    }
+
+    const availableWidth = wrapperDimensions.width;
+    const availableHeight = wrapperDimensions.height;
+    const ratio = activeAspectRatio;
+
+    let width = availableWidth;
+    let height = Math.round(width / ratio);
+
+    if (height > availableHeight) {
+      height = availableHeight;
+      width = Math.round(height * ratio);
+    }
+
+    return {
+      height: Math.max(1, height),
+      width: Math.max(1, width),
+    };
+  }, [liveUrl, wrapperDimensions, activeAspectRatio]);
 
   return (
     <div
@@ -380,11 +443,35 @@ export function BrowserPreview({
         </div>
       </div>
 
-      {/* ─── BROWSER USE LIVE FRAME (Filling available space natively) ─── */}
-      <div className="flex flex-1 min-h-0 min-w-0 w-full flex-col overflow-hidden p-2 sm:p-2.5">
+      {/* ─── BROWSER USE LIVE FRAME (Aspect-ratio matching with zero letterbox gaps) ─── */}
+      <div
+        className="flex flex-1 min-h-0 min-w-0 w-full items-center justify-center overflow-hidden p-2 sm:p-2.5"
+        ref={wrapperRef}
+      >
         <div
-          className="relative flex flex-1 w-full flex-col overflow-hidden rounded-lg border border-border/40 bg-background shadow-xs"
+          className={cn(
+            "relative flex flex-col overflow-hidden rounded-lg border border-border/40 bg-background shadow-xs",
+            fittedDimensions ? "shrink-0" : "flex-1 w-full"
+          )}
           ref={containerRef}
+          style={
+            liveUrl && activeAspectRatio
+              ? {
+                  aspectRatio: `${activeAspectRatio}`,
+                  maxHeight: "100%",
+                  maxWidth: "100%",
+                  ...(fittedDimensions
+                    ? {
+                        height: `${fittedDimensions.height}px`,
+                        width: `${fittedDimensions.width}px`,
+                      }
+                    : {
+                        height: "100%",
+                        width: "100%",
+                      }),
+                }
+              : undefined
+          }
         >
           {liveUrl ? (
             <iframe

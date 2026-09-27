@@ -53,6 +53,8 @@ export type BrowserSessionStreamData = {
   liveUrl: string;
   targetUrl: string;
   status?: string;
+  browserScreenHeight?: number;
+  browserScreenWidth?: number;
 };
 
 export type QAStepStreamData = {
