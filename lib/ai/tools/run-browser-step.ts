@@ -55,6 +55,13 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
         const result = await runBrowserTask({
           instruction,
           isCancelled: () => ExecutionTracker.isCancelRequested(chatId),
+          onHeartbeat: (elapsedSeconds) => {
+            dataStream.write({
+              data: `Agent executing browser actions (${elapsedSeconds}s)...`,
+              transient: true,
+              type: "data-qa-status",
+            });
+          },
           onStep: (step) => {
             stepCount += 1;
 
@@ -130,6 +137,9 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
             chatId,
             reason: "user_stopped",
           });
+
+          // Halts streamText so the LLM does not execute subsequent tool calls in background
+          ExecutionTracker.abortChat(chatId, "user_stopped");
 
           dataStream.write({
             data: "Test execution stopped by user.",

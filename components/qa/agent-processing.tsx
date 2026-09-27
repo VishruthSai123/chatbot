@@ -325,10 +325,17 @@ export const AgentProcessing = memo(
       evaluateTestResultPart,
     ]);
 
+    const validActions = useMemo(
+      () => actions.filter((a) => Boolean(a.label?.trim())),
+      [actions]
+    );
+
     // Duration formatting
     const durationDisplay = useMemo(() => {
       if (isAnyRunning) {
-        return `Working for ${elapsedSeconds || 1}s`;
+        return elapsedSeconds > 0
+          ? `Working for ${elapsedSeconds}s`
+          : "Working…";
       }
       if (persistedDuration !== null) {
         return `Worked for ${persistedDuration}s`;
@@ -337,11 +344,11 @@ export const AgentProcessing = memo(
         return `Worked for ${elapsedSeconds}s`;
       }
       // Historical fallback based on step count
-      const totalSteps = actions.length;
+      const totalSteps = validActions.length;
       return totalSteps > 0
         ? `Worked for ${Math.max(2, totalSteps * 3)}s`
         : "Worked for a few seconds";
-    }, [isAnyRunning, elapsedSeconds, persistedDuration, actions.length]);
+    }, [isAnyRunning, elapsedSeconds, persistedDuration, validActions.length]);
 
     return (
       <Collapsible
@@ -350,17 +357,26 @@ export const AgentProcessing = memo(
           className
         )}
         onOpenChange={setIsOpen}
-        open={isOpen}
+        open={isOpen && validActions.length > 0}
       >
-        {/* Header with Worked for Xs and Chevron */}
-        <CollapsibleTrigger className="group flex items-center gap-1.5 text-muted-foreground/80 text-xs transition-colors hover:text-foreground">
+        {/* Header with Worked for Xs and Chevron if items exist */}
+        <CollapsibleTrigger
+          className={cn(
+            "group flex items-center gap-1.5 text-muted-foreground/80 text-xs transition-colors",
+            validActions.length > 0
+              ? "hover:text-foreground cursor-pointer"
+              : "cursor-default pointer-events-none"
+          )}
+        >
           <span className="font-normal">{durationDisplay}</span>
-          <ChevronDownIcon
-            className={cn(
-              "size-3.5 text-muted-foreground/60 transition-transform duration-200 group-hover:text-foreground",
-              isOpen ? "rotate-180" : "rotate-0"
-            )}
-          />
+          {validActions.length > 0 && (
+            <ChevronDownIcon
+              className={cn(
+                "size-3.5 text-muted-foreground/60 transition-transform duration-200 group-hover:text-foreground",
+                isOpen ? "rotate-180" : "rotate-0"
+              )}
+            />
+          )}
         </CollapsibleTrigger>
 
         {/* Live / completed description */}
@@ -386,47 +402,53 @@ export const AgentProcessing = memo(
           )}
         </div>
 
-        {/* Expandable Action Steps */}
-        <CollapsibleContent className="mt-2.5 space-y-1.5 border-border/20 border-l pl-2 text-xs">
-          {actions.map((action) => (
-            <div className="flex items-center gap-2 py-0.5" key={action.id}>
-              {action.status === "completed" && (
-                <span className="select-none text-muted-foreground/60">→</span>
-              )}
-              {action.status === "running" && (
-                <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary" />
-              )}
-              {action.status === "failed" && (
-                <span className="select-none text-destructive">✕</span>
-              )}
-              {action.status === "pending" && (
-                <span className="select-none text-muted-foreground/40">◇</span>
-              )}
+        {/* Expandable Action Steps only if real actions exist */}
+        {validActions.length > 0 && (
+          <CollapsibleContent className="mt-2.5 space-y-1.5 border-border/20 border-l pl-2 text-xs">
+            {validActions.map((action) => (
+              <div className="flex items-center gap-2 py-0.5" key={action.id}>
+                {action.status === "completed" && (
+                  <span className="select-none text-muted-foreground/60">
+                    →
+                  </span>
+                )}
+                {action.status === "running" && (
+                  <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary" />
+                )}
+                {action.status === "failed" && (
+                  <span className="select-none text-destructive">✕</span>
+                )}
+                {action.status === "pending" && (
+                  <span className="select-none text-muted-foreground/40">
+                    ◇
+                  </span>
+                )}
 
-              {action.status === "running" ? (
-                <Shimmer className="text-xs" duration={1.2}>
-                  {action.label}
-                </Shimmer>
-              ) : (
-                <span
-                  className={cn(
-                    "text-xs leading-normal",
-                    action.status === "failed"
-                      ? "text-destructive"
-                      : "text-muted-foreground/80"
-                  )}
-                >
-                  {action.label}
-                  {action.error ? (
-                    <span className="ml-1.5 text-destructive/90 text-xs">
-                      ({action.error})
-                    </span>
-                  ) : null}
-                </span>
-              )}
-            </div>
-          ))}
-        </CollapsibleContent>
+                {action.status === "running" ? (
+                  <Shimmer className="text-xs" duration={1.2}>
+                    {action.label}
+                  </Shimmer>
+                ) : (
+                  <span
+                    className={cn(
+                      "text-xs leading-normal",
+                      action.status === "failed"
+                        ? "text-destructive"
+                        : "text-muted-foreground/80"
+                    )}
+                  >
+                    {action.label}
+                    {action.error ? (
+                      <span className="ml-1.5 text-destructive/90 text-xs">
+                        ({action.error})
+                      </span>
+                    ) : null}
+                  </span>
+                )}
+              </div>
+            ))}
+          </CollapsibleContent>
+        )}
       </Collapsible>
     );
   }

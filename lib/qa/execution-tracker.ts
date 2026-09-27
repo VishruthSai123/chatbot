@@ -9,6 +9,7 @@ import {
 } from "./execution-types";
 
 interface GlobalQARunRegistry {
+  abortControllers: Map<string, AbortController>;
   activeRunsByChat: Map<string, ExecutionRecord>;
   runsById: Map<string, ExecutionRecord>;
 }
@@ -19,9 +20,14 @@ const globalForQA = globalThis as unknown as {
 
 if (!globalForQA.__qaRegistry) {
   globalForQA.__qaRegistry = {
+    abortControllers: new Map(),
     activeRunsByChat: new Map(),
     runsById: new Map(),
   };
+}
+
+if (!globalForQA.__qaRegistry.abortControllers) {
+  globalForQA.__qaRegistry.abortControllers = new Map();
 }
 
 const registry = globalForQA.__qaRegistry;
@@ -143,11 +149,56 @@ function startRun({
   return record;
 }
 
+function registerAbortController(chatId: string, controller: AbortController) {
+  registry.abortControllers.set(chatId, controller);
+}
+
+function unregisterAbortController(chatId: string) {
+  registry.abortControllers.delete(chatId);
+}
+
+function abortChat(chatId: string, reason?: string) {
+  const controller = registry.abortControllers.get(chatId);
+  if (controller && !controller.signal.aborted) {
+    try {
+      controller.abort(reason || "user_stopped");
+    } catch {
+      /* non-fatal */
+    }
+  }
+}
+
 function setActiveTaskId(chatId: string, runId: string, taskId: string) {
   const run = registry.activeRunsByChat.get(chatId);
   if (run && run.runId === runId) {
     run.activeTaskId = taskId;
     run.lastActivityAt = new Date().toISOString();
+
+    // Critical race check: If cancellation was already requested while task creation was in-flight,
+    // immediately stop the cloud task now that we have its ID!
+    if (
+      run.isCancelRequested ||
+      run.executionState === "CANCELLING" ||
+      run.executionState === "CANCELLED"
+    ) {
+      console.log(
+        `[ExecutionTracker] Run was already cancelled. Halting late-registered task ${taskId}...`
+      );
+      try {
+        const client = getBrowserUseClient();
+        client.tasks.stop(taskId).catch((err) => {
+          console.warn(
+            `[ExecutionTracker] Error stopping late task ${taskId}:`,
+            err
+          );
+        });
+      } catch (err) {
+        console.warn(
+          `[ExecutionTracker] Failed to get client to stop late task ${taskId}:`,
+          err
+        );
+      }
+    }
   }
 }
 
@@ -413,6 +464,9 @@ async function cancelRun({
   runId?: string;
   reason?: string;
 }): Promise<ExecutionRecord | null> {
+  // 1. Immediately abort active stream/LLM execution so no further tool calls are initiated
+  abortChat(chatId, reason);
+
   const run = registry.activeRunsByChat.get(chatId);
   if (!run) {
     return null;
@@ -443,14 +497,30 @@ async function cancelRun({
   const lastStep = run.steps.at(-1) ?? null;
   run.lastConfirmedAction = lastStep ? lastStep.action : run.currentAction;
 
-  // Stop active Browser Use task immediately if running
+  // Stop active Browser Use task immediately if running, and wait for confirmation
   if (run.activeTaskId) {
     try {
       const client = getBrowserUseClient();
       await client.tasks.stop(run.activeTaskId);
       console.log(
-        `[ExecutionTracker] Successfully requested stop for active cloud task: ${run.activeTaskId}`
+        `[ExecutionTracker] Requested stop for active cloud task: ${run.activeTaskId}. Waiting for confirmation...`
       );
+
+      // Verify that cloud task acknowledged stopped status
+      const deadline = Date.now() + 3500;
+      while (Date.now() < deadline) {
+        // biome-ignore lint/performance/noAwaitInLoops: sequential status polling
+        const st = await client.tasks
+          .status(run.activeTaskId)
+          .catch(() => null);
+        if (st && (st.status === "stopped" || st.status === "finished")) {
+          console.log(
+            `[ExecutionTracker] Cloud task ${run.activeTaskId} confirmed ${st.status}`
+          );
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 350));
+      }
     } catch (err) {
       console.warn(
         `[ExecutionTracker] Failed to stop cloud task ${run.activeTaskId} (may have already finished):`,
@@ -531,6 +601,7 @@ function restoreRun(record: ExecutionRecord): ExecutionRecord {
 }
 
 export const ExecutionTracker = {
+  abortChat,
   cancelRun,
   completeRun,
   failRun,
@@ -539,9 +610,11 @@ export const ExecutionTracker = {
   isCancelRequested,
   recordFinalizing,
   recordWaiting,
+  registerAbortController,
   restoreRun,
   resumeRun,
   setActiveTaskId,
   startRun,
+  unregisterAbortController,
   updateStep,
 };

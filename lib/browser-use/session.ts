@@ -36,6 +36,7 @@ export interface ActiveBrowserSession {
 export interface RunBrowserTaskOptions {
   instruction: string;
   isCancelled?: () => boolean;
+  onHeartbeat?: (elapsedSeconds: number) => void | Promise<void>;
   onStep?: (step: TaskStepView) => void | Promise<void>;
   onTaskId?: (taskId: string) => void;
   sessionId: string;
@@ -197,60 +198,106 @@ export async function runBrowserTask({
   instruction,
   onStep,
   onTaskId,
+  onHeartbeat,
   isCancelled,
 }: RunBrowserTaskOptions): Promise<RunBrowserTaskResult> {
   const client = getBrowserUseClient();
-  const taskRun = client.run(instruction, {
-    sessionId,
-  });
-  const steps: TaskStepView[] = [];
 
-  let recordedTaskId: string | null = null;
-  const checkTaskId = () => {
-    if (!recordedTaskId && taskRun.taskId) {
-      recordedTaskId = taskRun.taskId;
-      onTaskId?.(recordedTaskId);
+  // 1. Immediately create task on Browser Use Cloud
+  console.log(
+    `[BrowserUse] Initiating cloud task on session ${sessionId}: "${instruction.slice(0, 80)}..."`
+  );
+  const created = await client.tasks.create({
+    sessionId,
+    task: instruction,
+  });
+
+  const taskId = created.id;
+  console.log(`[BrowserUse] Cloud task created with ID: ${taskId}`);
+
+  // 2. Publish taskId immediately so ExecutionTracker and DB snapshot have it
+  onTaskId?.(taskId);
+
+  // 3. Early check: Was cancellation requested while task was being created?
+  if (isCancelled?.()) {
+    console.log(
+      `[BrowserUse] Cancellation was already requested for task ${taskId}. Halting immediately...`
+    );
+    try {
+      await client.tasks.stop(taskId);
+    } catch {
+      /* non-fatal */
     }
-  };
+    return {
+      isStopped: true,
+      isSuccess: false,
+      output: "Task stopped by user",
+      steps: [],
+      taskId,
+    };
+  }
+
+  const steps: TaskStepView[] = [];
+  let seen = 0;
+  const pollInterval = 1500;
+  const startTime = Date.now();
+  // Safe max timeout: Browser Use default is 5 mins (300,000ms)
+  const timeoutMs = 300_000;
+  const deadline = startTime + timeoutMs;
 
   try {
-    for await (const step of taskRun) {
-      checkTaskId();
-
-      // Check if cancellation was requested while running
+    while (Date.now() < deadline) {
+      // Periodic check for cancellation requested during loop
       if (isCancelled?.()) {
         console.log(
-          `[BrowserUse] Cancellation detected in runBrowserTask. Stopping active task ${taskRun.taskId}...`
+          `[BrowserUse] Cancellation requested for task ${taskId}. Stopping remote execution...`
         );
-        if (taskRun.taskId) {
-          try {
-            await client.tasks.stop(taskRun.taskId);
-          } catch {
-            /* ignore if already stopped */
-          }
+        try {
+          // biome-ignore lint/performance/noAwaitInLoops: sequential stop request
+          await client.tasks.stop(taskId);
+        } catch {
+          /* non-fatal */
         }
         return {
           isStopped: true,
           isSuccess: false,
           output: "Task stopped by user",
           steps,
-          taskId: recordedTaskId || taskRun.taskId,
+          taskId,
         };
       }
 
-      steps.push(step);
-      if (onStep) {
-        try {
-          await onStep(step);
-        } catch (err) {
-          console.error("[BrowserUse] Error in onStep handler:", err);
-        }
+      let task: any;
+      try {
+        task = await client.tasks.get(taskId);
+      } catch (err) {
+        console.warn(`[BrowserUse] Polling task ${taskId} warning:`, err);
+        await new Promise((r) => setTimeout(r, pollInterval));
+        continue;
       }
 
-      if (isCancelled?.()) {
-        if (taskRun.taskId) {
+      // Process any new steps arrived from cloud
+      if (task.steps && Array.isArray(task.steps)) {
+        for (let i = seen; i < task.steps.length; i += 1) {
+          const step = task.steps[i];
+          steps.push(step);
+          if (onStep) {
+            try {
+              // biome-ignore lint/performance/noAwaitInLoops: sequential step dispatch
+              await onStep(step);
+            } catch (stepErr) {
+              console.error("[BrowserUse] Error in onStep handler:", stepErr);
+            }
+          }
+        }
+        seen = task.steps.length;
+      }
+
+      // Check if stopped remotely
+      if (task.status === "stopped" || isCancelled?.()) {
+        if (isCancelled?.()) {
           try {
-            await client.tasks.stop(taskRun.taskId);
+            await client.tasks.stop(taskId);
           } catch {
             /* non-fatal */
           }
@@ -260,53 +307,68 @@ export async function runBrowserTask({
           isSuccess: false,
           output: "Task stopped by user",
           steps,
-          taskId: recordedTaskId || taskRun.taskId,
+          taskId,
         };
       }
+
+      // Check if finished
+      if (task.status === "finished") {
+        return {
+          isStopped: false,
+          isSuccess: task.isSuccess ?? null,
+          output:
+            typeof task.output === "string"
+              ? task.output
+              : JSON.stringify(task.output ?? ""),
+          steps,
+          taskId,
+        };
+      }
+
+      // Emit heartbeat to keep SSE connection alive and UI progress updated
+      const elapsedSeconds = Math.max(
+        1,
+        Math.floor((Date.now() - startTime) / 1000)
+      );
+      if (onHeartbeat) {
+        try {
+          await onHeartbeat(elapsedSeconds);
+        } catch {
+          /* non-fatal */
+        }
+      }
+
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        break;
+      }
+      await new Promise((r) =>
+        setTimeout(r, Math.min(pollInterval, remaining))
+      );
     }
 
-    checkTaskId();
-
-    if (isCancelled?.()) {
-      return {
-        isStopped: true,
-        isSuccess: false,
-        output: "Task stopped by user",
-        steps,
-        taskId: recordedTaskId || taskRun.taskId,
-      };
-    }
-
-    const result = await taskRun;
-
-    return {
-      isStopped: false,
-      isSuccess: result.isSuccess ?? null,
-      output:
-        typeof result.output === "string"
-          ? result.output
-          : JSON.stringify(result.output ?? ""),
-      steps,
-      taskId: recordedTaskId || taskRun.taskId,
-    };
+    throw new Error(`Task ${taskId} did not complete within ${timeoutMs}ms`);
   } catch (error) {
     if (isCancelled?.()) {
-      return {
-        isStopped: true,
-        isSuccess: false,
-        output: "Task stopped by user",
-        steps,
-        taskId: recordedTaskId || taskRun.taskId,
-      };
-    }
-
-    // If the task timed out or failed, attempt to stop remote task execution
-    if (taskRun.taskId) {
       try {
-        await client.tasks.stop(taskRun.taskId);
+        await client.tasks.stop(taskId);
       } catch {
         /* non-fatal */
       }
+      return {
+        isStopped: true,
+        isSuccess: false,
+        output: "Task stopped by user",
+        steps,
+        taskId,
+      };
+    }
+
+    // Try stopping remote execution if timed out or failed
+    try {
+      await client.tasks.stop(taskId);
+    } catch {
+      /* non-fatal */
     }
     throw error;
   }

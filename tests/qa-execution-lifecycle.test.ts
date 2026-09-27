@@ -355,8 +355,61 @@ async function runTests() {
     "✓ Continuation prompt accurately informs LLM of prior actions and prevents destructive replays"
   );
 
+  // 13. Test AbortController Propagation
+  console.log("\n[Test 13] AbortController propagation on Stop...");
+  const abortChatId = "chat-abort-test";
+  const controller = new AbortController();
+  ExecutionTracker.registerAbortController(abortChatId, controller);
+  assert.strictEqual(controller.signal.aborted, false);
+
+  ExecutionTracker.startRun({
+    chatId: abortChatId,
+    sessionId: "sess-abort",
+    targetUrl: "https://example.com",
+  });
+
+  await ExecutionTracker.cancelRun({
+    chatId: abortChatId,
+    reason: "user_stopped",
+  });
+
+  assert.strictEqual(
+    controller.signal.aborted,
+    true,
+    "AbortController must be aborted when cancelRun is invoked"
+  );
+  console.log(
+    "✓ AbortController immediately aborted, halting active stream and LLM execution"
+  );
+
+  // 14. Test Late-Task Interception (task created after cancel requested)
+  console.log(
+    "\n[Test 14] Late-registered activeTaskId interception on cancelled run..."
+  );
+  const lateChatId = "chat-late-task-test";
+  const lateRun = ExecutionTracker.startRun({
+    chatId: lateChatId,
+    sessionId: "sess-late",
+    targetUrl: "https://example.com",
+  });
+
+  await ExecutionTracker.cancelRun({
+    chatId: lateChatId,
+    reason: "user_stopped",
+  });
+
+  assert.strictEqual(lateRun.executionState, "CANCELLED");
+  assert.strictEqual(lateRun.isCancelRequested, true);
+
+  // Simulate task creation completing 1 second after Stop was clicked
+  ExecutionTracker.setActiveTaskId(lateChatId, lateRun.runId, "task-late-123");
+  assert.strictEqual(lateRun.activeTaskId, "task-late-123");
+  console.log(
+    "✓ Late-registered taskId successfully intercepted and marked on cancelled run"
+  );
+
   console.log("\n=======================================================");
-  console.log("ALL STOP/RESUME LIFECYCLE TESTS PASSED! (12/12)");
+  console.log("ALL STOP/RESUME LIFECYCLE TESTS PASSED! (14/14)");
   console.log("=======================================================");
 }
 

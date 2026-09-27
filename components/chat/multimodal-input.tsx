@@ -467,6 +467,18 @@ function PureMultimodalInput({
   }, [chatId, setMessages, stop]);
 
   useEffect(() => {
+    const handleRemoteStop = (e: Event) => {
+      const customEvent = e as CustomEvent<{ chatId: string }>;
+      if (customEvent.detail?.chatId === chatId) {
+        stop();
+      }
+    };
+    window.addEventListener("qa:stop-requested", handleRemoteStop);
+    return () =>
+      window.removeEventListener("qa:stop-requested", handleRemoteStop);
+  }, [chatId, stop]);
+
+  useEffect(() => {
     const handleResume = (e: Event) => {
       const customEvent = e as CustomEvent<{ chatId: string }>;
       if (

@@ -281,7 +281,19 @@ export async function POST(request: Request) {
           clearHealthCheckTimer();
         };
 
+        // Create authoritative AbortController for this chat execution
+        const chatAbortController = new AbortController();
+        ExecutionTracker.registerAbortController(id, chatAbortController);
+
+        const onRequestAbort = () => {
+          chatAbortController.abort("client_disconnected");
+        };
+        request.signal.addEventListener("abort", onRequestAbort, {
+          once: true,
+        });
+
         const result = streamText({
+          abortSignal: chatAbortController.signal,
           activeTools:
             isReasoningModel && !supportsTools
               ? []
@@ -308,6 +320,8 @@ export async function POST(request: Request) {
           model: getLanguageModel(chatModel),
           onAbort() {
             stopWaitingStatus();
+            request.signal.removeEventListener("abort", onRequestAbort);
+            ExecutionTracker.unregisterAbortController(id);
             ExecutionTracker.cancelRun({
               chatId: id,
               reason: "user_aborted_stream",
@@ -320,9 +334,13 @@ export async function POST(request: Request) {
           },
           onEnd() {
             stopWaitingStatus();
+            request.signal.removeEventListener("abort", onRequestAbort);
+            ExecutionTracker.unregisterAbortController(id);
           },
           onError({ error }: { error?: unknown }) {
             stopWaitingStatus();
+            request.signal.removeEventListener("abort", onRequestAbort);
+            ExecutionTracker.unregisterAbortController(id);
             ExecutionTracker.failRun({
               chatId: id,
               error:

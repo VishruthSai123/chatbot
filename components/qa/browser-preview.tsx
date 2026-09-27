@@ -108,8 +108,17 @@ export function BrowserPreview({
     return () => ro.disconnect();
   }, [setBrowserDimensions]);
 
-  // If liveUrl is not in metadata, fetch active session from DB for this chatId
-  const shouldFetchSession = !metadata?.liveUrl && Boolean(chatId);
+  const isExecuting =
+    metadata?.executionState === "STARTING" ||
+    metadata?.executionState === "RUNNING" ||
+    metadata?.executionState === "CANCELLING" ||
+    metadata?.executionState === "RESUMING" ||
+    metadata?.status === "working";
+
+  // Reconcile from backend if liveUrl is missing OR if execution is actively running/recovering
+  const shouldFetchSession =
+    Boolean(chatId) && (!metadata?.liveUrl || isExecuting);
+
   const sessionQuery = useMemo(() => {
     if (!shouldFetchSession) {
       return null;
@@ -139,6 +148,7 @@ export function BrowserPreview({
     } | null;
     execution: any;
   }>(sessionQuery, fetcher, {
+    refreshInterval: isExecuting ? 2500 : 0,
     revalidateOnFocus: false,
   });
 
