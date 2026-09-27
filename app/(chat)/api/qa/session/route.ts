@@ -81,64 +81,67 @@ export async function GET(request: Request) {
     let execution = ExecutionTracker.getActiveRun(chatId);
 
     // If tracker in-memory is empty (e.g. server reboot or new tab), restore from DB snapshot
+    if (!execution && testSession?.executionSnapshot) {
+      try {
+        execution = ExecutionTracker.restoreRun(
+          testSession.executionSnapshot as any
+        );
+      } catch (err) {
+        console.warn(
+          "[QA Session API] Failed to restore execution snapshot:",
+          err
+        );
+      }
+    }
+
+    if (testSession.status === "cancelled" && execution) {
+      execution.executionState = "CANCELLED";
+      execution.isCancelRequested = true;
+      execution.currentAction = "Test stopped by user";
+    }
+
+    // Fallback reconstruction if no snapshot was persisted yet
     if (!execution && testSession) {
-      if (testSession.executionSnapshot) {
-        try {
-          execution = ExecutionTracker.restoreRun(
-            testSession.executionSnapshot as any
-          );
-        } catch (err) {
-          console.warn(
-            "[QA Session API] Failed to restore execution snapshot:",
-            err
-          );
-        }
-      }
+      const findings = await getQAFindingsBySessionId({
+        testSessionId: testSession.id,
+      }).catch(() => []);
 
-      // Fallback reconstruction if no snapshot was persisted yet
-      if (!execution) {
-        const findings = await getQAFindingsBySessionId({
-          testSessionId: testSession.id,
-        }).catch(() => []);
+      const lastFinding = findings.at(-1);
+      const isComplete = currentStatus === "completed" || Boolean(lastFinding);
+      const isStopped =
+        currentStatus === "cancelled" || currentStatus === "paused";
 
-        const lastFinding = findings.at(-1);
-        const isComplete =
-          currentStatus === "completed" || Boolean(lastFinding);
-        const isStopped =
-          currentStatus === "cancelled" || currentStatus === "paused";
-
-        execution = {
-          activeTaskId: null,
-          browserSessionId: testSession.browserSessionId ?? undefined,
-          chatId: testSession.chatId,
-          completedAt:
-            isComplete || isStopped
-              ? testSession.updatedAt.toISOString()
-              : undefined,
-          currentAction: isComplete
-            ? "Test completed"
-            : isStopped
-              ? "Test stopped by user"
-              : "Ready",
-          currentStep: 0,
-          executionState: isComplete
-            ? "COMPLETED"
-            : isStopped
-              ? "CANCELLED"
-              : currentStatus === "active"
-                ? "WAITING"
-                : "STARTING",
-          findingId: lastFinding?.id,
-          lastActivityAt: testSession.updatedAt.toISOString(),
-          runId: `restored-${testSession.id}`,
-          sequence: 1,
-          sessionId: testSession.id,
-          startedAt: testSession.createdAt.toISOString(),
-          steps: [],
-          targetUrl: testSession.targetUrl,
-          verdict: (lastFinding?.verdict as any) ?? undefined,
-        };
-      }
+      execution = {
+        activeTaskId: null,
+        browserSessionId: testSession.browserSessionId ?? undefined,
+        chatId: testSession.chatId,
+        completedAt:
+          isComplete || isStopped
+            ? testSession.updatedAt.toISOString()
+            : undefined,
+        currentAction: isComplete
+          ? "Test completed"
+          : isStopped
+            ? "Test stopped by user"
+            : "Ready",
+        currentStep: 0,
+        executionState: isComplete
+          ? "COMPLETED"
+          : isStopped
+            ? "CANCELLED"
+            : currentStatus === "active"
+              ? "WAITING"
+              : "STARTING",
+        findingId: lastFinding?.id,
+        lastActivityAt: testSession.updatedAt.toISOString(),
+        runId: `restored-${testSession.id}`,
+        sequence: 1,
+        sessionId: testSession.id,
+        startedAt: testSession.createdAt.toISOString(),
+        steps: [],
+        targetUrl: testSession.targetUrl,
+        verdict: (lastFinding?.verdict as any) ?? undefined,
+      };
     }
 
     return Response.json({

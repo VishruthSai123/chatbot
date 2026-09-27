@@ -194,6 +194,20 @@ export async function POST(request: Request) {
       longitude,
     };
 
+    const isDuplicate =
+      message && messagesFromDb.some((m) => m.id === message.id);
+    if (isDuplicate) {
+      console.warn(
+        `[api/chat] Duplicate request for message ${message.id} in chat ${id}. Ignoring replay.`
+      );
+      const emptyStream = createUIMessageStream({
+        execute: async () => {
+          // Intentional no-op: duplicate message replay ignored
+        },
+      });
+      return createUIMessageStreamResponse({ stream: emptyStream });
+    }
+
     if (message?.role === "user") {
       await saveMessages({
         messages: [

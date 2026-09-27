@@ -98,8 +98,13 @@ function startRun({
 }): ExecutionRecord {
   const existing = registry.activeRunsByChat.get(chatId);
 
-  // If continuing an existing session that was stopped/paused or still active:
-  if (existing && existing.sessionId === sessionId) {
+  // If continuing an existing session that was paused or still active:
+  if (
+    existing &&
+    existing.sessionId === sessionId &&
+    existing.executionState !== "CANCELLED" &&
+    existing.executionState !== "CANCELLING"
+  ) {
     existing.lastActivityAt = new Date().toISOString();
     existing.isCancelRequested = false;
     if (browserSessionId && !existing.browserSessionId) {
@@ -609,9 +614,56 @@ async function cancelRun({
   await persistExecutionSnapshot(run);
 
   try {
-    const { updateTestSessionStatus } = await import("@/lib/db/queries");
+    const { updateTestSessionStatus, getMessagesByChatId, saveMessages } =
+      await import("@/lib/db/queries");
     if (run.sessionId) {
       await updateTestSessionStatus({ id: run.sessionId, status: "cancelled" });
+    }
+
+    // Persist a stopped assistant message if the last message in DB was user prompt
+    const existingMessages = await getMessagesByChatId({
+      id: run.chatId,
+    }).catch(() => []);
+    const lastMsg = existingMessages.at(-1);
+    if (lastMsg && lastMsg.role === "user") {
+      await saveMessages({
+        messages: [
+          {
+            attachments: [],
+            chatId: run.chatId,
+            createdAt: new Date(),
+            id: generateUUID(),
+            parts: [
+              ...(run.steps.length > 0
+                ? [
+                    {
+                      input: {
+                        instruction:
+                          run.currentAction || "Execute browser task",
+                      },
+                      output: {
+                        isStopped: true,
+                        output: "Test execution was stopped by user.",
+                        stepCount: run.steps.length,
+                        success: false,
+                      },
+                      state: "output-available",
+                      toolCallId: `stopped-step-${run.sequence}`,
+                      type: "tool-runBrowserStep",
+                    },
+                  ]
+                : []),
+              {
+                text: "Test was stopped by user.",
+                type: "text",
+              },
+            ],
+            role: "assistant",
+          },
+        ],
+      }).catch((err) => {
+        console.warn("[ExecutionTracker] Could not save stopped message:", err);
+      });
     }
   } catch {
     /* non-fatal */
@@ -657,6 +709,20 @@ async function resumeRun({
   run.sequence += 1;
 
   await persistExecutionSnapshot(run);
+
+  try {
+    const { updateTestSessionStatus } = await import("@/lib/db/queries");
+    if (run.sessionId) {
+      await updateTestSessionStatus({
+        force: true,
+        id: run.sessionId,
+        status: "active",
+      });
+    }
+  } catch {
+    /* non-fatal */
+  }
+
   return run;
 }
 

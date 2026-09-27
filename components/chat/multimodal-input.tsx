@@ -506,9 +506,36 @@ function PureMultimodalInput({
       })
     );
 
-    // 4. Cleanly abort the client stream
+    // 4. Cleanly abort the client stream and finalize local messages
     stop();
-    setMessages((prev) => prev);
+    setMessages((prev) => {
+      const last = prev.at(-1);
+      if (last && last.role === "assistant") {
+        return [
+          ...prev.slice(0, -1),
+          {
+            ...last,
+            parts: [
+              ...(last.parts || []).map((p: any) =>
+                p.type === "tool-runBrowserStep" &&
+                p.state !== "output-available"
+                  ? {
+                      ...p,
+                      output: {
+                        isStopped: true,
+                        output: "Test execution was stopped by user.",
+                      },
+                      state: "output-available",
+                    }
+                  : p
+              ),
+              { text: "Test was stopped by user.", type: "text" },
+            ],
+          },
+        ];
+      }
+      return prev;
+    });
   }, [chatId, setMessages, setMetadata, stop]);
 
   useEffect(() => {

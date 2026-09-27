@@ -290,7 +290,7 @@ export function ActiveChatProvider({ children }: { children: ReactNode }) {
   }, [sendMessage, chatId]);
 
   useAutoResume({
-    autoResume: !isNewChat && !!chatData,
+    autoResume: false,
     initialMessages,
     resumeStream,
     setMessages,

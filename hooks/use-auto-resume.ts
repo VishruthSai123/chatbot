@@ -13,24 +13,15 @@ export type UseAutoResumeParams = {
 };
 
 export function useAutoResume({
-  autoResume,
+  autoResume: _autoResume,
   initialMessages,
-  resumeStream,
+  resumeStream: _resumeStream,
   setMessages,
 }: UseAutoResumeParams) {
   const { dataStream } = useDataStream();
 
-  useEffect(() => {
-    if (!autoResume) {
-      return;
-    }
-
-    const mostRecentMessage = initialMessages.at(-1);
-
-    if (mostRecentMessage?.role === "user") {
-      resumeStream();
-    }
-  }, [autoResume, initialMessages.at, resumeStream]);
+  // Page load must be strictly read-only with respect to execution.
+  // Never automatically replay prompt or resume stream on reload.
 
   useEffect(() => {
     if (!dataStream) {

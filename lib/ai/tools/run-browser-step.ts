@@ -22,18 +22,39 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
           type: "data-qa-status",
         });
 
-        // Ensure run is active in tracker
+        const { getTestSessionByChatId } = await import("@/lib/db/queries");
+        const existingSession = await getTestSessionByChatId({
+          chatId,
+        }).catch(() => null);
         let activeRun = ExecutionTracker.getActiveRun(chatId);
+
+        const isCancelled =
+          ExecutionTracker.isCancelRequested(chatId) ||
+          existingSession?.status === "cancelled" ||
+          activeRun?.executionState === "CANCELLED" ||
+          activeRun?.executionState === "CANCELLING";
+
+        if (isCancelled && activeRun?.executionState !== "RESUMING") {
+          console.log(
+            `[runBrowserStep] Execution blocked because session ${chatId} is cancelled.`
+          );
+          return {
+            isStopped: true,
+            output:
+              "Test execution was stopped by user. To continue, say 'Resume' or 'Continue'.",
+            stepCount: 0,
+            success: false,
+            taskId: null,
+          };
+        }
+
+        // Ensure run is active in tracker
         if (
           !activeRun ||
           activeRun.executionState === "COMPLETED" ||
-          activeRun.executionState === "CANCELLED" ||
-          activeRun.executionState === "FAILED"
+          activeRun.executionState === "FAILED" ||
+          activeRun.executionState === "RESUMING"
         ) {
-          const { getTestSessionByChatId } = await import("@/lib/db/queries");
-          const existingSession = await getTestSessionByChatId({
-            chatId,
-          }).catch(() => null);
           activeRun = ExecutionTracker.startRun({
             browserSessionId,
             chatId,
