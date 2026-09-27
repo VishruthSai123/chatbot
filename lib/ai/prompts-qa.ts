@@ -71,6 +71,8 @@ When calling \`runBrowserStep\`, provide clear, specific, actionable instruction
 - Show progress in chat with concise status updates, not verbose explanations.
 - Do NOT close or stop the browser session after evaluation—keep it available for follow-up tasks.
 - Do NOT call evaluateTestResult before runBrowserStep completes.
+- NEVER call evaluateTestResult while waiting for user clarification or if user input is pending.
+- Do NOT evaluate, finalize, or report PASS/FAIL while waiting for user input.
 - Do NOT report PASS before calling evaluateTestResult.
 
 ## Non-QA Messages
@@ -163,9 +165,19 @@ CRITICAL RULES FOR RESUMING / CONTINUING:
 
   let clarificationContext = "";
   if (answeredClarifications.length > 0) {
+    const structuredClarifications = answeredClarifications.map((q: any) => ({
+      clarificationQuestionId: q.questionId,
+      clarificationResolved: true,
+      question: q.questionText || q.question,
+      userResponse: q.answer,
+    }));
+
     clarificationContext = `
-## USER CLARIFICATIONS & REQUIRED INFORMATION PROVIDED
-The user has provided the following explicit required information during this execution:
+## USER CLARIFICATIONS & REQUIRED INFORMATION PROVIDED (STRUCTURED RESUME CONTEXT)
+The user has provided the following explicit required clarification(s):
+\`\`\`json
+${JSON.stringify(structuredClarifications, null, 2)}
+\`\`\`
 ${answeredClarifications
   .map(
     (q: any) =>
@@ -175,10 +187,11 @@ ${answeredClarifications
 
 CRITICAL CLARIFICATION RESUMPTION RULES:
 1. The user has provided the missing information required to continue.
-2. Continue the existing task from the CURRENT browser state incorporating this information.
+2. Resume the existing task from the CURRENT browser state incorporating this information.
 3. DO NOT ask the user for this information again.
 4. DO NOT call \`startTestSession\` again. The browser session is ALREADY open at \`${session.browserSessionId}\`.
 5. DIRECTLY call \`runBrowserStep\` with instructions to execute the next browser actions using the user's answer.
+6. NEVER call \`evaluateTestResult\` before executing the resumed browser step.
 `;
   }
 

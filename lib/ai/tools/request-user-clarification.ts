@@ -85,7 +85,7 @@ export const requestUserClarification = ({
         runId: activeRun.runId,
       });
 
-      if (!updatedRun) {
+      if (updatedRun?.executionState !== "WAITING_FOR_USER") {
         return {
           error: "Failed to transition to WAITING_FOR_USER state.",
           success: false,

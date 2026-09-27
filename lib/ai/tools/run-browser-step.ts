@@ -55,6 +55,26 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
           };
         }
 
+        // HARD EXECUTION BARRIER: If WAITING_FOR_USER and question is not answered, block any browser action!
+        if (
+          activeRun?.executionState === "WAITING_FOR_USER" &&
+          activeRun.pendingQuestion &&
+          !activeRun.pendingQuestion.isAnswered
+        ) {
+          console.warn(
+            `[ExecutionGuard] runId=${activeRun.runId} state=WAITING_FOR_USER blockedAction=runBrowserStep`
+          );
+          return {
+            blocked: true,
+            isStopped: false,
+            output:
+              "Execution is currently waiting for user clarification. Please answer the clarification question before continuing browser actions.",
+            stepCount: 0,
+            success: false,
+            taskId: null,
+          };
+        }
+
         // Ensure session is alive and usable before launching task
         let effectiveSessionId = browserSessionId;
         const isSessionAlive = await isBrowserSessionUsable(effectiveSessionId);
@@ -76,6 +96,15 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
 
           effectiveSessionId = recoveredSession.browserSessionId;
 
+          if (
+            activeRun?.executionState === "WAITING_FOR_USER" ||
+            activeRun?.executionState === "RESUMING"
+          ) {
+            console.log(
+              `[Clarification] runId=${activeRun.runId} questionId=none previousRunState=${activeRun.executionState} newRunState=RUNNING action=EXPIRED_SESSION_RECOVERED timestamp=${new Date().toISOString()}`
+            );
+          }
+
           dataStream.write({
             data: {
               browserScreenHeight: recoveredSession.browserScreenHeight,
@@ -96,7 +125,8 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
         if (
           activeRun &&
           (activeRun.executionState === "RESUMING" ||
-            activeRun.executionState === "WAITING_FOR_USER")
+            (activeRun.executionState === "WAITING_FOR_USER" &&
+              !activeRun.pendingQuestion))
         ) {
           activeRun.executionState = "RUNNING";
           activeRun.browserSessionId = effectiveSessionId;

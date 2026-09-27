@@ -369,21 +369,43 @@ function recordWaitingForUser({
     return null;
   }
 
-  // Do not override cancellation or terminal states
+  const previousState = run.executionState;
+
+  // Do not override cancellation or cancelling states
   if (
     isCancelRequested(chatId) ||
-    !canTransitionState(run.executionState, "WAITING_FOR_USER")
+    run.executionState === "CANCELLED" ||
+    run.executionState === "CANCELLING"
   ) {
-    return run;
+    console.warn(
+      `[ExecutionGuard] runId=${run.runId} state=${run.executionState} blockedAction=recordWaitingForUser (cancelled)`
+    );
+    return null;
   }
 
+  // If run was prematurely marked COMPLETED by a background task/reconciliation glitch,
+  // but an active tool is requesting clarification, rescue the run back to active testing.
+  if (!canTransitionState(run.executionState, "WAITING_FOR_USER")) {
+    if (run.executionState === "COMPLETED") {
+      console.log(
+        `[Clarification] Rescuing run ${run.runId} from premature COMPLETED state to enter WAITING_FOR_USER.`
+      );
+    } else {
+      console.warn(
+        `[ExecutionGuard] runId=${run.runId} state=${run.executionState} blockedAction=recordWaitingForUser (invalid transition)`
+      );
+      return null;
+    }
+  }
+
+  const now = new Date().toISOString();
   run.executionState = "WAITING_FOR_USER";
   run.currentAction = `Waiting for your input: ${question.questionText.slice(0, 100)}`;
   run.pendingQuestion = question;
   if (!run.clarificationHistory) {
     run.clarificationHistory = [];
   }
-  run.lastActivityAt = new Date().toISOString();
+  run.lastActivityAt = now;
   run.sequence += 1;
 
   // Mark all running steps as completed since we're pausing for user
@@ -394,6 +416,14 @@ function recordWaitingForUser({
   }
 
   persistExecutionSnapshot(run);
+
+  console.log(
+    `[Clarification] runId=${run.runId} questionId=${question.questionId} previousRunState=${previousState} newRunState=WAITING_FOR_USER action=CREATED timestamp=${now}`
+  );
+  console.log(
+    `[Clarification] runId=${run.runId} questionId=${question.questionId} previousRunState=${previousState} newRunState=WAITING_FOR_USER action=WAITING timestamp=${now}`
+  );
+
   return run;
 }
 
@@ -420,20 +450,36 @@ function resumeWithAnswer({
     return null;
   }
 
+  const now = new Date().toISOString();
+
   // Verify question matches
   if (!run.pendingQuestion || run.pendingQuestion.questionId !== questionId) {
-    console.warn(
-      `[ExecutionTracker] resumeWithAnswer: question ${questionId} does not match pending question ${run.pendingQuestion?.questionId}`
+    // Check if already answered in clarificationHistory
+    const alreadyAnswered = run.clarificationHistory?.find(
+      (q) => q.questionId === questionId && q.isAnswered
     );
-    return run;
+    if (alreadyAnswered) {
+      console.log(
+        `[Clarification] runId=${run.runId} questionId=${questionId} previousRunState=${run.executionState} newRunState=${run.executionState} action=REJECTED_DUPLICATE timestamp=${now}`
+      );
+      return run;
+    }
+
+    console.warn(
+      `[Clarification] runId=${run.runId} questionId=${questionId} previousRunState=${run.executionState} newRunState=${run.executionState} action=REJECTED_STALE timestamp=${now}`
+    );
+    return null;
   }
 
   // Already answered — idempotent
   if (run.pendingQuestion.isAnswered) {
+    console.log(
+      `[Clarification] runId=${run.runId} questionId=${questionId} previousRunState=${run.executionState} newRunState=${run.executionState} action=REJECTED_DUPLICATE timestamp=${now}`
+    );
     return run;
   }
 
-  const now = new Date().toISOString();
+  const previousState = run.executionState;
 
   // Mark the question as answered
   const answeredQuestion: ClarificationQuestion = {
@@ -460,6 +506,14 @@ function resumeWithAnswer({
   run.sequence += 1;
 
   persistExecutionSnapshot(run);
+
+  console.log(
+    `[Clarification] runId=${run.runId} questionId=${questionId} previousRunState=${previousState} newRunState=RESUMING action=ANSWER_SUBMITTED timestamp=${now}`
+  );
+  console.log(
+    `[Clarification] runId=${run.runId} questionId=${questionId} previousRunState=${previousState} newRunState=RESUMING action=RESUMED timestamp=${now}`
+  );
+
   return run;
 }
 
@@ -479,6 +533,14 @@ function recordFinalizing({
   }
   if (runId && run.runId !== runId) {
     return null;
+  }
+
+  // HARD BARRIER: Cannot finalize while WAITING_FOR_USER
+  if (run.executionState === "WAITING_FOR_USER" || run.pendingQuestion) {
+    console.warn(
+      `[ExecutionGuard] runId=${run.runId} state=${run.executionState} blockedAction=recordFinalizing`
+    );
+    return run;
   }
 
   if (
@@ -524,6 +586,14 @@ function completeRun({
   }
   if (runId && run.runId !== runId) {
     return null;
+  }
+
+  // HARD BARRIER: Cannot complete run while WAITING_FOR_USER
+  if (run.executionState === "WAITING_FOR_USER" || run.pendingQuestion) {
+    console.warn(
+      `[ExecutionGuard] runId=${run.runId} state=${run.executionState} blockedAction=completeRun`
+    );
+    return run;
   }
 
   // If run was already cancelled or cancelling, do not complete
@@ -665,6 +735,9 @@ async function cancelRun({
   }
 
   const now = new Date().toISOString();
+  const wasWaiting =
+    run.executionState === "WAITING_FOR_USER" || Boolean(run.pendingQuestion);
+  const cancelledQuestionId = run.pendingQuestion?.questionId;
   run.isCancelRequested = true;
   run.executionState = "CANCELLING";
   run.cancellationReason = reason;
@@ -756,6 +829,12 @@ async function cancelRun({
   run.currentAction = "Test stopped by user";
   run.pendingQuestion = null;
   run.sequence += 1;
+
+  if (wasWaiting) {
+    console.log(
+      `[Clarification] runId=${run.runId} questionId=${cancelledQuestionId ?? "none"} previousRunState=WAITING_FOR_USER newRunState=CANCELLED action=CANCELLED timestamp=${run.completedAt}`
+    );
+  }
 
   // Mark all steps cleanly
   for (const step of run.steps) {
@@ -977,8 +1056,21 @@ async function maybePersistAssistantMessage(
     }).catch(() => []);
     const lastMsg = existingMessages.at(-1);
     if (lastMsg && lastMsg.role === "user") {
+      // HARD BARRIER: Never persist completed or terminal assistant message while WAITING_FOR_USER
+      if (run.executionState === "WAITING_FOR_USER" || run.pendingQuestion) {
+        console.warn(
+          `[ExecutionGuard] runId=${run.runId} state=${run.executionState} blockedAction=maybePersistAssistantMessage`
+        );
+        return;
+      }
+
       const isComplete = run.executionState === "COMPLETED";
       const isStopped = run.executionState === "CANCELLED";
+
+      // HARD BARRIER: Do NOT synthesize fake PASS verdict if no verdict exists on the run!
+      if (!isStopped && !run.verdict && !run.findingId) {
+        return;
+      }
 
       const stepParts =
         run.steps.length > 0
@@ -1134,8 +1226,8 @@ async function reconcileRun(chatId: string): Promise<ExecutionRecord | null> {
 
         if (isSessionDead) {
           if (
-            run.executionState === "WAITING_FOR_USER" &&
-            !run.isCancelRequested
+            run.executionState === "WAITING_FOR_USER" ||
+            run.pendingQuestion
           ) {
             console.log(
               `[ExecutionTracker] Reconciling: cloud session ${run.browserSessionId} ended while WAITING_FOR_USER. Preserving WAITING_FOR_USER state.`
@@ -1220,19 +1312,7 @@ async function reconcileRun(chatId: string): Promise<ExecutionRecord | null> {
         const task = await client.tasks.get(targetTaskId).catch(() => null);
         if (task) {
           if (task.status === "finished") {
-            if (
-              run.executionState === "WAITING_FOR_USER" &&
-              !run.isCancelRequested
-            ) {
-              console.log(
-                `[ExecutionTracker] Reconciling: cloud task ${targetTaskId} is finished, but run is WAITING_FOR_USER. Preserving WAITING_FOR_USER state.`
-              );
-              return run;
-            }
-
-            console.log(
-              `[ExecutionTracker] Reconciling: cloud task ${targetTaskId} is finished. Updating state to COMPLETED.`
-            );
+            // Update step progress from cloud task
             if (
               task.steps &&
               Array.isArray(task.steps) &&
@@ -1259,29 +1339,52 @@ async function reconcileRun(chatId: string): Promise<ExecutionRecord | null> {
               }
             }
 
-            run.executionState = "COMPLETED";
-            run.completedAt = task.finishedAt || new Date().toISOString();
-            run.lastActivityAt = run.completedAt;
-            run.currentAction =
-              typeof task.output === "string" && task.output.trim()
-                ? "Test execution completed"
-                : "Test completed";
-            run.sequence += 1;
-
-            await persistExecutionSnapshot(run);
-
-            if (run.sessionId) {
-              const { updateTestSessionStatus } = await import(
-                "@/lib/db/queries"
+            // HARD BARRIER: If WAITING_FOR_USER, preserve WAITING_FOR_USER state unconditionally!
+            if (
+              run.executionState === "WAITING_FOR_USER" ||
+              run.pendingQuestion
+            ) {
+              console.log(
+                `[ExecutionTracker] Reconciling: cloud task ${targetTaskId} is finished, but run is WAITING_FOR_USER. Preserving WAITING_FOR_USER state.`
               );
-              await updateTestSessionStatus({
-                force: true,
-                id: run.sessionId,
-                status: "completed",
-              }).catch(() => null);
+              return run;
             }
 
-            await maybePersistAssistantMessage(run);
+            // A finished cloud task step does NOT complete a test run.
+            // Only evaluateTestResult or user cancellation completes a test run.
+            // If the run was already FINALIZING (meaning evaluateTestResult was called),
+            // then it may transition to COMPLETED if a verdict exists.
+            if (run.executionState === "FINALIZING" && run.verdict) {
+              console.log(
+                `[ExecutionTracker] Reconciling: task ${targetTaskId} is finished and run was FINALIZING with verdict. Completing run.`
+              );
+              run.executionState = "COMPLETED";
+              run.completedAt = task.finishedAt || new Date().toISOString();
+              run.lastActivityAt = run.completedAt;
+              run.currentAction = "Test execution completed";
+              run.sequence += 1;
+
+              await persistExecutionSnapshot(run);
+
+              if (run.sessionId) {
+                const { updateTestSessionStatus } = await import(
+                  "@/lib/db/queries"
+                );
+                await updateTestSessionStatus({
+                  force: true,
+                  id: run.sessionId,
+                  status: "completed",
+                }).catch(() => null);
+              }
+
+              await maybePersistAssistantMessage(run);
+              return run;
+            }
+
+            // Otherwise, keep the current execution state (RUNNING, RESUMING, etc.)
+            // and do NOT call maybePersistAssistantMessage!
+            run.lastActivityAt = task.finishedAt || new Date().toISOString();
+            await persistExecutionSnapshot(run);
             return run;
           }
 
@@ -1402,6 +1505,11 @@ async function reconcileRun(chatId: string): Promise<ExecutionRecord | null> {
 
   // 3. Stale activity check: if a non-terminal run has had no activity for > 2 minutes
   // and no task is in-flight on cloud, it must not remain active
+  if (run.executionState === "WAITING_FOR_USER" || run.pendingQuestion) {
+    // HARD INVARIANT: The run must remain WAITING_FOR_USER indefinitely until user answers or cancels.
+    return run;
+  }
+
   const elapsedSinceActivity =
     Date.now() - new Date(run.lastActivityAt || run.startedAt).getTime();
   if (elapsedSinceActivity > 120_000) {

@@ -289,8 +289,131 @@ async function runClarificationTests() {
     "✓ Reconcile preserves WAITING_FOR_USER without prematurely marking COMPLETED/FAILED"
   );
 
+  // Scenario 11: ExecutionGuard: completeRun is strictly blocked during WAITING_FOR_USER
+  console.log(
+    "\n[Test 11] ExecutionGuard: completeRun blocked during WAITING_FOR_USER..."
+  );
+  const guardChatId = "chat-guard-test";
+  const guardRun = ExecutionTracker.startRun({
+    browserSessionId: "bu-guard-sess",
+    chatId: guardChatId,
+    sessionId: "sess-guard",
+    targetUrl: "https://guard.example.com",
+  });
+
+  const guardQuestion: ClarificationQuestion = {
+    askedAt: new Date().toISOString(),
+    inputType: "confirm",
+    isAnswered: false,
+    options: ["Continue", "Cancel"],
+    question: "Do you confirm?",
+    questionId: "q-guard-1",
+    questionText: "Do you confirm?",
+    questionType: "confirm",
+    required: true,
+    runId: guardRun.runId,
+    type: "USER_INPUT_REQUIRED",
+  };
+
+  ExecutionTracker.recordWaitingForUser({
+    chatId: guardChatId,
+    question: guardQuestion,
+    runId: guardRun.runId,
+  });
+
+  const attemptedComplete = ExecutionTracker.completeRun({
+    chatId: guardChatId,
+    findingId: "f-123",
+    verdict: "pass",
+  });
+  assert.strictEqual(attemptedComplete?.executionState, "WAITING_FOR_USER");
+  assert.strictEqual(
+    attemptedComplete?.pendingQuestion?.questionId,
+    "q-guard-1"
+  );
+  console.log("✓ completeRun strictly blocked while WAITING_FOR_USER");
+
+  // Scenario 12: ExecutionGuard: recordFinalizing is strictly blocked during WAITING_FOR_USER
+  console.log(
+    "\n[Test 12] ExecutionGuard: recordFinalizing blocked during WAITING_FOR_USER..."
+  );
+  const attemptedFinalizing = ExecutionTracker.recordFinalizing({
+    chatId: guardChatId,
+  });
+  assert.strictEqual(attemptedFinalizing?.executionState, "WAITING_FOR_USER");
+  assert.strictEqual(
+    attemptedFinalizing?.pendingQuestion?.questionId,
+    "q-guard-1"
+  );
+  console.log("✓ recordFinalizing strictly blocked while WAITING_FOR_USER");
+
+  // Scenario 13: Inactivity (> 120s) must NEVER mark WAITING_FOR_USER as COMPLETED
+  console.log(
+    "\n[Test 13] Inactivity > 120s preserves WAITING_FOR_USER indefinitely..."
+  );
+  // Artificially age the run to 10 minutes ago
+  guardRun.lastActivityAt = new Date(Date.now() - 600_000).toISOString();
+  guardRun.startedAt = new Date(Date.now() - 600_000).toISOString();
+  const inactiveReconcile = await ExecutionTracker.reconcileRun(guardChatId);
+  assert.strictEqual(inactiveReconcile?.executionState, "WAITING_FOR_USER");
+  assert.strictEqual(
+    inactiveReconcile?.pendingQuestion?.questionId,
+    "q-guard-1"
+  );
+  console.log("✓ Stale activity check preserves WAITING_FOR_USER indefinitely");
+
+  // Scenario 14: Stale question ID answer rejected with REJECTED_STALE
+  console.log("\n[Test 14] Stale question ID answer rejected...");
+  const staleAnswer = ExecutionTracker.resumeWithAnswer({
+    answer: "Yes",
+    chatId: guardChatId,
+    questionId: "q-non-existent-or-stale",
+  });
+  assert.strictEqual(staleAnswer, null);
+  assert.strictEqual(guardRun.executionState, "WAITING_FOR_USER");
+  assert.strictEqual(guardRun.pendingQuestion?.questionId, "q-guard-1");
+  console.log("✓ Stale question ID answer safely rejected");
+
+  // Scenario 15: Prematurely completed run rescued to WAITING_FOR_USER
+  console.log(
+    "\n[Test 15] Prematurely completed run rescued for active clarification..."
+  );
+  const rescueChatId = "chat-rescue-test";
+  const rescueRun = ExecutionTracker.startRun({
+    browserSessionId: "bu-rescue-sess",
+    chatId: rescueChatId,
+    sessionId: "sess-rescue",
+    targetUrl: "https://rescue.example.com",
+  });
+  // Simulate premature completion from background glitch
+  rescueRun.executionState = "COMPLETED";
+
+  const rescueQuestion: ClarificationQuestion = {
+    askedAt: new Date().toISOString(),
+    inputType: "text",
+    isAnswered: false,
+    question: "Enter your PIN",
+    questionId: "q-pin-rescue",
+    questionText: "Enter your PIN",
+    questionType: "text",
+    required: true,
+    runId: rescueRun.runId,
+    type: "USER_INPUT_REQUIRED",
+  };
+
+  const rescuedRun = ExecutionTracker.recordWaitingForUser({
+    chatId: rescueChatId,
+    question: rescueQuestion,
+    runId: rescueRun.runId,
+  });
+
+  assert.ok(rescuedRun);
+  assert.strictEqual(rescuedRun.executionState, "WAITING_FOR_USER");
+  assert.strictEqual(rescuedRun.pendingQuestion?.questionId, "q-pin-rescue");
+  console.log("✓ Prematurely completed run safely rescued to WAITING_FOR_USER");
+
   console.log("\n=======================================================");
-  console.log("ALL HUMAN-IN-THE-LOOP CLARIFICATION TESTS PASSED!");
+  console.log("ALL HUMAN-IN-THE-LOOP CLARIFICATION TESTS PASSED! (15/15)");
   console.log("=======================================================\n");
 }
 

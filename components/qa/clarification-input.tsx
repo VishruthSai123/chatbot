@@ -60,7 +60,16 @@ export const ClarificationInput = memo(function PureClarificationInput({
 
         const data = await res.json();
 
-        if (data.success || data.alreadyAnswered) {
+        if (data.cancelled) {
+          setSubmitted(true);
+          setSubmittedAnswer("Cancelled");
+          onAnswered?.(question.questionId, "Cancel");
+          window.dispatchEvent(
+            new CustomEvent("qa:stop-requested", {
+              detail: { chatId },
+            })
+          );
+        } else if (data.success || data.alreadyAnswered) {
           setSubmitted(true);
           setSubmittedAnswer(answer);
           onAnswered?.(question.questionId, answer);
@@ -159,7 +168,14 @@ export const ClarificationInput = memo(function PureClarificationInput({
       >
         <div className="rounded-xl border border-border/40 bg-gradient-to-br from-muted/40 to-muted/20 px-4 py-3">
           <div className="flex items-start gap-2.5">
-            <CheckIcon className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+            {submittedAnswer.toLowerCase() === "cancel" ||
+            submittedAnswer === "Cancelled" ? (
+              <span className="mt-0.5 size-4 shrink-0 text-red-500 font-bold text-xs flex items-center justify-center">
+                ✕
+              </span>
+            ) : (
+              <CheckIcon className="mt-0.5 size-4 shrink-0 text-emerald-500" />
+            )}
             <div className="min-w-0 flex-1">
               <p className="text-[13px] leading-relaxed text-muted-foreground/80">
                 {displayQuestion}

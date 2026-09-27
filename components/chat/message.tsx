@@ -4,6 +4,7 @@ import { memo, useCallback } from "react";
 import { AgentProcessing } from "@/components/qa/agent-processing";
 import { ClarificationInput } from "@/components/qa/clarification-input";
 import { FindingCard } from "@/components/qa/finding-card";
+import { useActiveChat } from "@/hooks/use-active-chat";
 import { useArtifactMetadataSelector } from "@/hooks/use-artifact";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
@@ -149,6 +150,22 @@ export const QAToolGroup = memo(function PureQAToolGroup({
     (p) => p.type === "tool-requestUserClarification"
   );
 
+  const { sendMessage } = useActiveChat();
+
+  const handleClarificationAnswered = useCallback(
+    (_questionId: string, answer: string) => {
+      if (answer.trim().toLowerCase() === "cancel") {
+        return;
+      }
+      if (!isLoading && sendMessage) {
+        sendMessage({
+          parts: [{ text: answer, type: "text" }],
+        });
+      }
+    },
+    [isLoading, sendMessage]
+  );
+
   return (
     <div className="w-full space-y-2.5" key={`qa-group-${messageId}`}>
       <AgentProcessing
@@ -163,6 +180,7 @@ export const QAToolGroup = memo(function PureQAToolGroup({
       {Boolean(showClarification && chatId) && (
         <ClarificationInput
           chatId={chatId || ""}
+          onAnswered={handleClarificationAnswered}
           question={metadataPendingQuestion}
         />
       )}

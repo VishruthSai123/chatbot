@@ -313,36 +313,46 @@ export const AgentProcessing = memo(
       isStartRunning || isRunStepRunning || isEvalRunning
     );
 
+    const isWaitingForUser =
+      metadata?.executionState === "WAITING_FOR_USER" ||
+      (Boolean(metadata?.pendingQuestion) &&
+        !metadata?.pendingQuestion?.isAnswered);
+
     // Terminal completion resolution:
     // If evaluation completed, or stream finished with all tools resolved and no active tool
     const isMessageFinished =
-      isEvalCompleted ||
-      (!isLoading && areAllMessageToolsResolved && !hasAnyActiveTool);
+      !isWaitingForUser &&
+      (isEvalCompleted ||
+        (!isLoading && areAllMessageToolsResolved && !hasAnyActiveTool));
 
     // If this message was stopped, its state is frozen at CANCELLED and never affected by future runs
     const execState = isThisMessageStopped
       ? "CANCELLED"
-      : isMessageFinished
-        ? errorPart
-          ? "FAILED"
-          : metadata?.executionState === "CANCELLED"
-            ? "CANCELLED"
-            : "COMPLETED"
-        : metadata?.executionState;
+      : isWaitingForUser
+        ? "WAITING_FOR_USER"
+        : isMessageFinished
+          ? errorPart
+            ? "FAILED"
+            : metadata?.executionState === "CANCELLED"
+              ? "CANCELLED"
+              : "COMPLETED"
+          : metadata?.executionState;
 
     const isCanonicalTerminal = isTerminalExecutionState(execState);
     const isMetadataTerminal =
-      metadata?.status === "completed" ||
-      metadata?.status === "stopped" ||
-      metadata?.status === "failed" ||
-      metadata?.status === "error";
+      !isWaitingForUser &&
+      (metadata?.status === "completed" ||
+        metadata?.status === "stopped" ||
+        metadata?.status === "failed" ||
+        metadata?.status === "error");
 
     const isTerminal =
-      isCanonicalTerminal ||
-      isMetadataTerminal ||
-      isThisMessageStopped ||
-      isMessageFinished ||
-      Boolean(metadata?.finding && !isThisMessageStopped);
+      !isWaitingForUser &&
+      (isCanonicalTerminal ||
+        isMetadataTerminal ||
+        isThisMessageStopped ||
+        isMessageFinished ||
+        Boolean(metadata?.finding && !isThisMessageStopped));
 
     // Network connectivity tracking
     const [isOnline, setIsOnline] = useState(
@@ -392,9 +402,9 @@ export const AgentProcessing = memo(
     // Track active execution duration
     useEffect(() => {
       let interval: NodeJS.Timeout | null = null;
-      const isWaitingForUser = execState === "WAITING_FOR_USER";
+      const isWaitingState = execState === "WAITING_FOR_USER";
 
-      if (isWaitingForUser) {
+      if (isWaitingState) {
         if (pauseStartRef.current === null) {
           pauseStartRef.current = Date.now();
         }
@@ -403,7 +413,7 @@ export const AgentProcessing = memo(
         pauseStartRef.current = null;
       }
 
-      if (isAnyRunning && !isWaitingForUser) {
+      if (isAnyRunning && !isWaitingState) {
         if (startTimeRef.current === null) {
           const runStartedAt = metadata?.startedAt
             ? new Date(metadata.startedAt).getTime()

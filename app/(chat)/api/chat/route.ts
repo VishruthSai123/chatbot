@@ -227,6 +227,7 @@ export async function POST(request: Request) {
       } else if (
         currentRun &&
         (currentRun.executionState === "WAITING_FOR_USER" ||
+          currentRun.executionState === "RESUMING" ||
           Boolean(currentRun.pendingQuestion))
       ) {
         const textPart = message.parts?.find((p) => p.type === "text") as any;
@@ -243,7 +244,14 @@ export async function POST(request: Request) {
         const isUsable = await isBrowserSessionUsable(
           activeTestSession.browserSessionId
         );
-        if (!isUsable) {
+        if (
+          !isUsable &&
+          currentRun?.executionState !== "WAITING_FOR_USER" &&
+          currentRun?.executionState !== "RESUMING" &&
+          !currentRun?.pendingQuestion
+        ) {
+          // If the run is WAITING_FOR_USER or RESUMING, DO NOT mark completed!
+          // The browser session will be recovered via restartBrowserSession in runBrowserStep!
           await updateTestSessionStatus({
             force: true,
             id: activeTestSession.id,

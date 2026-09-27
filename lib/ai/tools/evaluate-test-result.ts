@@ -58,6 +58,26 @@ export const evaluateTestResult = ({
           };
         }
 
+        // HARD EXECUTION BARRIER: Never evaluate while WAITING_FOR_USER
+        if (
+          activeRun?.executionState === "WAITING_FOR_USER" ||
+          activeRun?.pendingQuestion
+        ) {
+          console.warn(
+            `[ExecutionGuard] runId=${activeRun?.runId} state=${activeRun?.executionState} blockedAction=evaluateTestResult`
+          );
+          return {
+            actual: "Execution is waiting for user clarification.",
+            blocked: true,
+            expected: "User clarification must be answered before evaluation.",
+            findingId: null,
+            status: "blocked",
+            summary:
+              "Evaluation blocked: execution is currently waiting for user clarification.",
+            title: "Evaluation Blocked",
+          };
+        }
+
         // Transition tracker to FINALIZING
         ExecutionTracker.recordFinalizing({ chatId });
 

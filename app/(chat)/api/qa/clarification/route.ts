@@ -4,9 +4,9 @@ import { ExecutionTracker } from "@/lib/qa/execution-tracker";
 /**
  * POST /api/qa/clarification
  *
- * Receives the user's answer to a pending clarification question.
- * Updates the execution tracker with the answer, which unblocks the
- * polling loop in the requestUserClarification tool.
+ * Receives the user's answer or cancellation for a pending clarification question.
+ * Atomically validates ownership, run state, and question ID, then updates the
+ * execution tracker to unblock the tool loop or resume the execution.
  */
 export async function POST(request: Request) {
   const session = await auth();
@@ -17,18 +17,30 @@ export async function POST(request: Request) {
 
   try {
     const body = await request.json();
-    const { chatId, questionId, answer } = body;
+    const { chatId, questionId, answer, action } = body;
 
-    if (!chatId || !questionId || answer === undefined || answer === null) {
+    if (
+      !chatId ||
+      !questionId ||
+      (answer === undefined && action === undefined)
+    ) {
       return Response.json(
         {
-          error: "chatId, questionId, and answer are required",
+          error: "chatId, questionId, and answer or action are required",
         },
         { status: 400 }
       );
     }
 
-    const answerStr = String(answer);
+    const { getChatById } = await import("@/lib/db/queries");
+    const chat = await getChatById({ id: chatId });
+    if (!chat || chat.userId !== session.user.id) {
+      return Response.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const answerStr = String(answer ?? "");
+    const isCancel =
+      action === "cancel" || answerStr.trim().toLowerCase() === "cancel";
 
     // Verify there is an active run with a matching pending question
     let activeRun = ExecutionTracker.getActiveRun(chatId);
@@ -54,22 +66,56 @@ export async function POST(request: Request) {
       );
     }
 
+    // Cancellation flow: WAITING_FOR_USER -> CANCELLING -> CANCELLED
+    if (isCancel) {
+      const cancelledRun = await ExecutionTracker.cancelRun({
+        chatId,
+        reason: "user_cancelled_clarification",
+      });
+
+      console.log(
+        `[Clarification API] Run cancelled by user during question ${questionId} in chat ${chatId}`
+      );
+
+      return Response.json({
+        cancelled: true,
+        executionState: cancelledRun?.executionState ?? "CANCELLED",
+        questionId,
+        success: true,
+      });
+    }
+
+    // Check if already answered (idempotent / duplicate request)
+    const alreadyAnswered = activeRun.clarificationHistory?.find(
+      (q) => q.questionId === questionId && q.isAnswered
+    );
+    if (alreadyAnswered) {
+      return Response.json({
+        alreadyAnswered: true,
+        answer: alreadyAnswered.answer,
+        executionState: activeRun.executionState,
+        questionId,
+        runId: activeRun.runId,
+        success: true,
+      });
+    }
+
+    // Validate run state
+    if (activeRun.executionState !== "WAITING_FOR_USER") {
+      return Response.json(
+        {
+          error: `Run is not currently waiting for user input (current state: ${activeRun.executionState}).`,
+          executionState: activeRun.executionState,
+        },
+        { status: 409 }
+      );
+    }
+
+    // Validate pending question ID
     if (
       !activeRun.pendingQuestion ||
       activeRun.pendingQuestion.questionId !== questionId
     ) {
-      // Check if already answered (idempotent)
-      const alreadyAnswered = activeRun.clarificationHistory?.find(
-        (q) => q.questionId === questionId && q.isAnswered
-      );
-      if (alreadyAnswered) {
-        return Response.json({
-          alreadyAnswered: true,
-          answer: alreadyAnswered.answer,
-          success: true,
-        });
-      }
-
       return Response.json(
         {
           error: `No pending question with ID ${questionId} found.`,
@@ -79,7 +125,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // Record the answer and resume execution
+    // Record the answer and resume execution atomically
     const updatedRun = ExecutionTracker.resumeWithAnswer({
       answer: answerStr,
       chatId,
@@ -136,7 +182,13 @@ export async function GET(request: Request) {
     );
   }
 
-  const activeRun = ExecutionTracker.getActiveRun(chatId);
+  const { getChatById } = await import("@/lib/db/queries");
+  const chat = await getChatById({ id: chatId });
+  if (!chat || chat.userId !== session.user.id) {
+    return Response.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  let activeRun = ExecutionTracker.getActiveRun(chatId);
 
   if (!activeRun) {
     // Try to restore from DB
@@ -144,16 +196,16 @@ export async function GET(request: Request) {
       const { getTestSessionByChatId } = await import("@/lib/db/queries");
       const dbSession = await getTestSessionByChatId({ chatId });
       if (dbSession?.executionSnapshot) {
-        const snapshot = dbSession.executionSnapshot as any;
-        return Response.json({
-          clarificationHistory: snapshot.clarificationHistory || [],
-          pendingQuestion: snapshot.pendingQuestion || null,
-        });
+        activeRun = ExecutionTracker.restoreRun(
+          dbSession.executionSnapshot as any
+        );
       }
     } catch {
       /* non-fatal */
     }
+  }
 
+  if (!activeRun) {
     return Response.json({
       clarificationHistory: [],
       pendingQuestion: null,
@@ -162,6 +214,7 @@ export async function GET(request: Request) {
 
   return Response.json({
     clarificationHistory: activeRun.clarificationHistory || [],
+    executionState: activeRun.executionState,
     pendingQuestion: activeRun.pendingQuestion || null,
   });
 }
