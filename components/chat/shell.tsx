@@ -15,7 +15,8 @@ import {
 import { useActiveChat } from "@/hooks/use-active-chat";
 import {
   initialArtifactData,
-  useArtifact,
+  useArtifactActions,
+  useArtifactMetadataSelector,
   useArtifactSelector,
 } from "@/hooks/use-artifact";
 import type { Attachment, ChatMessage } from "@/lib/types";
@@ -54,9 +55,11 @@ export function ChatShell() {
   );
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
-  const { artifact, metadata, setArtifact, setMetadata } = useArtifact();
-  const isBrowser = artifact.kind === "browser";
-  const isFullscreen = Boolean(metadata?.isFullscreen);
+  const isBrowser = useArtifactSelector((state) => state.kind === "browser");
+  const isFullscreen = useArtifactMetadataSelector((meta) =>
+    Boolean(meta?.isFullscreen)
+  );
+  const { setArtifact, setMetadata } = useArtifactActions();
 
   // Restore active browser session and execution state on page load/refresh/reconnect
   const { data: sessionData } = useSWR<{

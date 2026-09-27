@@ -47,66 +47,76 @@ export function DataStreamHandler() {
         });
       }
 
-      setArtifact((draftArtifact) => {
-        if (!draftArtifact) {
-          return { ...initialArtifactData, status: "streaming" };
-        }
+      const isArtifactMutationDelta =
+        delta.type === "data-browser-session" ||
+        delta.type === "data-id" ||
+        delta.type === "data-title" ||
+        delta.type === "data-kind" ||
+        delta.type === "data-clear" ||
+        delta.type === "data-finish";
 
-        switch (delta.type) {
-          case "data-browser-session": {
-            const session = delta.data as {
-              id?: string;
-              targetUrl?: string;
-              liveUrl?: string;
-            };
-            return {
-              ...draftArtifact,
-              documentId: session.id ?? draftArtifact.documentId,
-              isVisible: true,
-              kind: "browser",
-              status: "streaming",
-              title: session.targetUrl || "Live Browser",
-            };
+      if (isArtifactMutationDelta) {
+        setArtifact((draftArtifact) => {
+          if (!draftArtifact) {
+            return { ...initialArtifactData, status: "streaming" };
           }
 
-          case "data-id":
-            return {
-              ...draftArtifact,
-              documentId: delta.data,
-              status: "streaming",
-            };
+          switch (delta.type) {
+            case "data-browser-session": {
+              const session = delta.data as {
+                id?: string;
+                targetUrl?: string;
+                liveUrl?: string;
+              };
+              return {
+                ...draftArtifact,
+                documentId: session.id ?? draftArtifact.documentId,
+                isVisible: true,
+                kind: "browser",
+                status: "streaming",
+                title: session.targetUrl || "Live Browser",
+              };
+            }
 
-          case "data-title":
-            return {
-              ...draftArtifact,
-              status: "streaming",
-              title: delta.data,
-            };
+            case "data-id":
+              return {
+                ...draftArtifact,
+                documentId: delta.data,
+                status: "streaming",
+              };
 
-          case "data-kind":
-            return {
-              ...draftArtifact,
-              kind: delta.data,
-              status: "streaming",
-            };
+            case "data-title":
+              return {
+                ...draftArtifact,
+                status: "streaming",
+                title: delta.data,
+              };
 
-          case "data-clear":
-            return {
-              ...draftArtifact,
-              content: "",
-              status: "streaming",
-            };
+            case "data-kind":
+              return {
+                ...draftArtifact,
+                kind: delta.data,
+                status: "streaming",
+              };
 
-          case "data-finish":
-            return {
-              ...draftArtifact,
-              status: "idle",
-            };
+            case "data-clear":
+              return {
+                ...draftArtifact,
+                content: "",
+                status: "streaming",
+              };
 
-          default:
-            return draftArtifact;
-        }
-      });
+            case "data-finish":
+              return {
+                ...draftArtifact,
+                status: "idle",
+              };
+
+            default:
+              return draftArtifact;
+          }
+        });
+      }
     }
   }, [dataStream, setArtifact, setMetadata, artifact, setDataStream, mutate]);
 

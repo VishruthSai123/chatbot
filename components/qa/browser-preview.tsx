@@ -85,30 +85,45 @@ export function BrowserPreview({
   const [isResuming, setIsResuming] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [wrapperDimensions, setWrapperDimensions] = useState<{
-    width: number;
-    height: number;
-  } | null>(null);
 
   useEffect(() => {
     if (!wrapperRef.current) {
       return;
     }
+    let timeoutId: NodeJS.Timeout | null = null;
     const ro = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;
         if (width > 0 && height > 0) {
-          const dims = {
-            height: Math.round(height),
-            width: Math.round(width),
-          };
-          setWrapperDimensions(dims);
-          setBrowserDimensions?.(dims);
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+          }
+          timeoutId = setTimeout(() => {
+            const rounded = {
+              height: Math.round(height),
+              width: Math.round(width),
+            };
+            setBrowserDimensions?.((prev) => {
+              if (
+                prev &&
+                Math.abs(prev.width - rounded.width) < 40 &&
+                Math.abs(prev.height - rounded.height) < 40
+              ) {
+                return prev;
+              }
+              return rounded;
+            });
+          }, 300);
         }
       }
     });
     ro.observe(wrapperRef.current);
-    return () => ro.disconnect();
+    return () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      ro.disconnect();
+    };
   }, [setBrowserDimensions]);
 
   const isExecuting =
@@ -120,18 +135,13 @@ export function BrowserPreview({
     metadata?.executionState === "RESUMING" ||
     metadata?.status === "working";
 
-  // Keep sessionQuery bound whenever chatId exists so mutateSession() always works!
+  // Use unified sessionQuery so SWR deduplicates with ChatShell and ChatHeader
   const sessionQuery = useMemo(() => {
     if (!chatId) {
       return null;
     }
-    const params = new URLSearchParams({ chatId });
-    if (wrapperDimensions) {
-      params.set("width", String(wrapperDimensions.width));
-      params.set("height", String(wrapperDimensions.height));
-    }
-    return `/api/qa/session?${params.toString()}`;
-  }, [chatId, wrapperDimensions]);
+    return `/api/qa/session?chatId=${chatId}`;
+  }, [chatId]);
 
   // Network connectivity tracking
   const [isOnline, setIsOnline] = useState(
@@ -158,13 +168,20 @@ export function BrowserPreview({
   }>(sessionQuery, fetcher, {
     errorRetryInterval: 2500,
     refreshInterval: (latestData) => {
+      const execState = latestData?.execution?.executionState;
+      if (isTerminalExecutionState(execState)) {
+        return 0;
+      }
+      if (!isOnline) {
+        return 3000;
+      }
       const isRemoteActive =
-        latestData?.execution?.executionState === "STARTING" ||
-        latestData?.execution?.executionState === "RUNNING" ||
-        latestData?.execution?.executionState === "WAITING" ||
-        latestData?.execution?.executionState === "FINALIZING" ||
-        latestData?.execution?.executionState === "RESUMING";
-      return isExecuting || isRemoteActive || !isOnline ? 2000 : 0;
+        execState === "STARTING" ||
+        execState === "RUNNING" ||
+        execState === "WAITING" ||
+        execState === "FINALIZING" ||
+        execState === "RESUMING";
+      return isRemoteActive ? 2500 : 0;
     },
     revalidateOnFocus: true,
     revalidateOnReconnect: true,
@@ -510,35 +527,6 @@ export function BrowserPreview({
     browserDimensions?.height,
   ]);
 
-  // Compute exact tight-bounding dimensions inside wrapper to guarantee zero letterbox gaps
-  const fittedDimensions = useMemo(() => {
-    if (
-      !liveUrl ||
-      !wrapperDimensions ||
-      wrapperDimensions.width <= 0 ||
-      wrapperDimensions.height <= 0
-    ) {
-      return null;
-    }
-
-    const availableWidth = wrapperDimensions.width;
-    const availableHeight = wrapperDimensions.height;
-    const ratio = activeAspectRatio;
-
-    let width = availableWidth;
-    let height = Math.round(width / ratio);
-
-    if (height > availableHeight) {
-      height = availableHeight;
-      width = Math.round(height * ratio);
-    }
-
-    return {
-      height: Math.max(1, height),
-      width: Math.max(1, width),
-    };
-  }, [liveUrl, wrapperDimensions, activeAspectRatio]);
-
   return (
     <div
       className={cn(
@@ -785,24 +773,13 @@ export function BrowserPreview({
         <div
           className={cn(
             "relative flex flex-col overflow-hidden rounded-lg border border-border/40 bg-background shadow-xs",
-            fittedDimensions ? "shrink-0" : "flex-1 w-full"
+            liveUrl ? "max-h-full max-w-full h-full w-auto" : "flex-1 w-full"
           )}
           ref={containerRef}
           style={
             liveUrl && activeAspectRatio
               ? {
                   aspectRatio: `${activeAspectRatio}`,
-                  maxHeight: "100%",
-                  maxWidth: "100%",
-                  ...(fittedDimensions
-                    ? {
-                        height: `${fittedDimensions.height}px`,
-                        width: `${fittedDimensions.width}px`,
-                      }
-                    : {
-                        height: "100%",
-                        width: "100%",
-                      }),
                 }
               : undefined
           }

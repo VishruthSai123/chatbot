@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import type { UIArtifact } from "@/components/chat/artifact";
 
 export const initialArtifactData: UIArtifact = {
@@ -34,6 +34,65 @@ export function useArtifactSelector<Selected>(selector: Selector<Selected>) {
   }, [localArtifact, selector]);
 
   return selectedValue;
+}
+
+export function useArtifactMetadataSelector<Selected>(
+  selector: (metadata: any) => Selected
+) {
+  const documentId = useArtifactSelector((state) => state.documentId);
+  const { data: localArtifactMetadata } = useSWR<any>(
+    documentId && documentId !== "init"
+      ? `artifact-metadata-${documentId}`
+      : null,
+    null,
+    {
+      fallbackData: null,
+    }
+  );
+
+  return useMemo(
+    () => selector(localArtifactMetadata),
+    [localArtifactMetadata, selector]
+  );
+}
+
+export function useArtifactActions() {
+  const { mutate } = useSWRConfig();
+  const documentId = useArtifactSelector((state) => state.documentId);
+
+  const setArtifact = useCallback(
+    (updaterFn: UIArtifact | ((currentArtifact: UIArtifact) => UIArtifact)) => {
+      mutate("artifact", (currentArtifact: UIArtifact | undefined) => {
+        const artifactToUpdate = currentArtifact || initialArtifactData;
+        if (typeof updaterFn === "function") {
+          return updaterFn(artifactToUpdate);
+        }
+        return updaterFn;
+      });
+    },
+    [mutate]
+  );
+
+  const setMetadata = useCallback(
+    (updaterFn: any) => {
+      if (!documentId) {
+        return;
+      }
+      mutate(`artifact-metadata-${documentId}`, (current: any) => {
+        const metadataToUpdate = current ?? {};
+        if (typeof updaterFn === "function") {
+          return updaterFn(metadataToUpdate);
+        }
+        return updaterFn;
+      });
+    },
+    [mutate, documentId]
+  );
+
+  return useMemo(
+    () => ({ setArtifact, setMetadata }),
+    [setArtifact, setMetadata]
+  );
 }
 
 export function useArtifact() {

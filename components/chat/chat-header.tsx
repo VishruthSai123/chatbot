@@ -6,7 +6,11 @@ import { memo, useCallback } from "react";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
-import { useArtifact } from "@/hooks/use-artifact";
+import {
+  useArtifactActions,
+  useArtifactMetadataSelector,
+  useArtifactSelector,
+} from "@/hooks/use-artifact";
 import { cn, fetcher } from "@/lib/utils";
 import { VercelIcon } from "./icons";
 import { VisibilitySelector, type VisibilityType } from "./visibility-selector";
@@ -21,7 +25,12 @@ function PureChatHeader({
   isReadonly: boolean;
 }) {
   const { state, toggleSidebar, isMobile } = useSidebar();
-  const { artifact, setArtifact, metadata } = useArtifact();
+  const isBrowserOpen = useArtifactSelector(
+    (artifactState) =>
+      artifactState.isVisible && artifactState.kind === "browser"
+  );
+  const metadataStatus = useArtifactMetadataSelector((meta) => meta?.status);
+  const { setArtifact } = useArtifactActions();
 
   // Check if a browser session exists for this chat in the database
   const { data: sessionData } = useSWR<{
@@ -36,10 +45,7 @@ function PureChatHeader({
     revalidateOnFocus: false,
   });
 
-  const isBrowserOpen = Boolean(
-    artifact.isVisible && artifact.kind === "browser"
-  );
-  const rawStatus = metadata?.status ?? sessionData?.session?.status;
+  const rawStatus = metadataStatus ?? sessionData?.session?.status;
   const isWorking = rawStatus === "working";
   const isLive = rawStatus === "live" || rawStatus === "active";
 

@@ -99,27 +99,12 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
           instruction,
           isCancelled: () => ExecutionTracker.isCancelRequested(chatId),
           onHeartbeat: (elapsedSeconds) => {
-            const current = ExecutionTracker.getActiveRun(chatId);
-            dataStream.write({
-              data: `Agent executing browser actions (${elapsedSeconds}s)...`,
-              transient: true,
-              type: "data-qa-status",
-            });
-            if (current && current.executionState === "RUNNING") {
+            // Keep SSE connection alive on long steps without spamming state or overwriting action text
+            if (elapsedSeconds > 0 && elapsedSeconds % 15 === 0) {
               dataStream.write({
-                data: {
-                  currentAction: `Agent executing browser actions (${elapsedSeconds}s)...`,
-                  currentStep: stepCount,
-                  executionState: "RUNNING",
-                  lastActivityAt: new Date().toISOString(),
-                  runId: current.runId,
-                  sequence: current.sequence,
-                  sessionId: current.sessionId,
-                  startedAt: current.startedAt,
-                  steps: current.steps,
-                },
+                data: "Executing browser action...",
                 transient: true,
-                type: "data-qa-execution",
+                type: "data-qa-status",
               });
             }
           },

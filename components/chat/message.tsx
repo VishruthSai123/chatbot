@@ -1,9 +1,9 @@
 "use client";
 import type { UseChatHelpers } from "@ai-sdk/react";
-import { useCallback } from "react";
+import { memo, useCallback } from "react";
 import { AgentProcessing } from "@/components/qa/agent-processing";
 import { FindingCard } from "@/components/qa/finding-card";
-import { useArtifact } from "@/hooks/use-artifact";
+import { useArtifactMetadataSelector } from "@/hooks/use-artifact";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
@@ -84,6 +84,93 @@ function ToolApprovalActions({
   );
 }
 
+const QAToolGroup = memo(function PureQAToolGroup({
+  messageId,
+  qaParts,
+  isLoading,
+}: {
+  messageId: string;
+  qaParts: any[];
+  isLoading: boolean;
+}) {
+  const metadataFinding = useArtifactMetadataSelector((meta) => meta?.finding);
+  const metadataExecState = useArtifactMetadataSelector(
+    (meta) => meta?.executionState
+  );
+  const metadataStatus = useArtifactMetadataSelector((meta) => meta?.status);
+
+  const isThisMessageStopped = qaParts.some(
+    (p) =>
+      Boolean((p as any).output?.isStopped) ||
+      (p as any).output?.output === "Test execution was stopped by user."
+  );
+
+  const evalPart = qaParts.find(
+    (p) =>
+      p.type === "tool-evaluateTestResult" &&
+      "output" in p &&
+      p.state === "output-available" &&
+      p.output &&
+      !("error" in (p.output as Record<string, unknown>))
+  ) as any;
+
+  const hasValidEvalPart =
+    evalPart &&
+    !evalPart.output?.cancelled &&
+    evalPart.output?.title !== "Test Stopped";
+
+  const rawFinding = hasValidEvalPart
+    ? evalPart.output
+    : !isThisMessageStopped &&
+        metadataFinding &&
+        (metadataExecState === "COMPLETED" || metadataStatus === "completed") &&
+        !metadataFinding.cancelled &&
+        metadataFinding.title !== "Test Stopped"
+      ? metadataFinding
+      : null;
+
+  return (
+    <div className="w-full space-y-2.5" key={`qa-group-${messageId}`}>
+      <AgentProcessing
+        isLoading={isLoading}
+        messageId={messageId}
+        parts={qaParts}
+      />
+
+      {rawFinding ? (
+        <div className="w-full max-w-[min(100%,560px)] animate-in fade-in-0 duration-300">
+          <FindingCard
+            finding={{
+              actual: String(rawFinding.actual ?? ""),
+              evidence: Array.isArray(rawFinding.evidence)
+                ? (rawFinding.evidence as any)
+                : [],
+              expected: String(rawFinding.expected ?? ""),
+              findingId: rawFinding.findingId
+                ? String(rawFinding.findingId)
+                : null,
+              reproductionSteps: Array.isArray(rawFinding.reproductionSteps)
+                ? (rawFinding.reproductionSteps as string[])
+                : [],
+              severity: rawFinding.severity
+                ? String(rawFinding.severity)
+                : "medium",
+              status:
+                (rawFinding.status as
+                  | "pass"
+                  | "fail"
+                  | "uncertain"
+                  | "blocked") ?? "uncertain",
+              summary: String(rawFinding.summary ?? ""),
+              title: String(rawFinding.title ?? "Test Result"),
+            }}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+});
+
 const PurePreviewMessage = ({
   addToolApprovalResponse,
   chatId,
@@ -111,7 +198,6 @@ const PurePreviewMessage = ({
     (part) => part.type === "file"
   );
 
-  const { metadata } = useArtifact();
   useDataStream();
 
   const isUser = message.role === "user";
@@ -360,79 +446,13 @@ const PurePreviewMessage = ({
     if (qaToolTypes.has(type)) {
       if (!qaBlockRendered) {
         qaBlockRendered = true;
-
-        const isThisMessageStopped = qaParts.some(
-          (p) =>
-            Boolean((p as any).output?.isStopped) ||
-            (p as any).output?.output === "Test execution was stopped by user."
-        );
-
-        const evalPart = qaParts.find(
-          (p) =>
-            p.type === "tool-evaluateTestResult" &&
-            "output" in p &&
-            p.state === "output-available" &&
-            p.output &&
-            !("error" in (p.output as Record<string, unknown>))
-        ) as any;
-
-        const hasValidEvalPart =
-          evalPart &&
-          !evalPart.output?.cancelled &&
-          evalPart.output?.title !== "Test Stopped";
-
-        const rawFinding = hasValidEvalPart
-          ? evalPart.output
-          : !isThisMessageStopped &&
-              metadata?.finding &&
-              (metadata.executionState === "COMPLETED" ||
-                metadata.status === "completed") &&
-              !metadata.finding.cancelled &&
-              metadata.finding.title !== "Test Stopped"
-            ? metadata.finding
-            : null;
-
         return (
-          <div className="w-full space-y-2.5" key={`qa-group-${message.id}`}>
-            <AgentProcessing
-              isLoading={isLoading}
-              messageId={message.id}
-              parts={qaParts}
-            />
-
-            {rawFinding ? (
-              <div className="w-full max-w-[min(100%,560px)] animate-in fade-in-0 duration-300">
-                <FindingCard
-                  finding={{
-                    actual: String(rawFinding.actual ?? ""),
-                    evidence: Array.isArray(rawFinding.evidence)
-                      ? (rawFinding.evidence as any)
-                      : [],
-                    expected: String(rawFinding.expected ?? ""),
-                    findingId: rawFinding.findingId
-                      ? String(rawFinding.findingId)
-                      : null,
-                    reproductionSteps: Array.isArray(
-                      rawFinding.reproductionSteps
-                    )
-                      ? (rawFinding.reproductionSteps as string[])
-                      : [],
-                    severity: rawFinding.severity
-                      ? String(rawFinding.severity)
-                      : "medium",
-                    status:
-                      (rawFinding.status as
-                        | "pass"
-                        | "fail"
-                        | "uncertain"
-                        | "blocked") ?? "uncertain",
-                    summary: String(rawFinding.summary ?? ""),
-                    title: String(rawFinding.title ?? "Test Result"),
-                  }}
-                />
-              </div>
-            ) : null}
-          </div>
+          <QAToolGroup
+            isLoading={isLoading}
+            key={`qa-group-${message.id}`}
+            messageId={message.id}
+            qaParts={qaParts}
+          />
         );
       }
       return null;

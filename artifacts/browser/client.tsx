@@ -43,18 +43,25 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
       }
 
       if (streamPart.type === "data-qa-status") {
-        setMetadata((prev) => {
-          if (isTerminalExecutionState(prev?.executionState)) {
-            return prev;
-          }
-          return {
-            ...prev,
-            currentAction:
-              typeof streamPart.data === "string"
-                ? streamPart.data
-                : prev?.currentAction,
-          };
-        });
+        const nextAction =
+          typeof streamPart.data === "string" ? streamPart.data : null;
+        if (nextAction) {
+          setMetadata((prev) => {
+            if (
+              isTerminalExecutionState(prev?.executionState) ||
+              prev?.executionState === "CANCELLED" ||
+              prev?.executionState === "CANCELLING" ||
+              prev?.currentAction === nextAction
+            ) {
+              return prev;
+            }
+            return {
+              ...prev,
+              currentAction: nextAction,
+              status: "working",
+            };
+          });
+        }
       }
 
       if (streamPart.type === "data-qa-execution") {
@@ -183,25 +190,6 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
             currentAction: step.action,
             currentUrl: step.url || safePrev.currentUrl,
             recentSteps: updatedSteps,
-            status: "working",
-          };
-        });
-      }
-
-      if (streamPart.type === "data-qa-status") {
-        const statusText = streamPart.data;
-        setMetadata((prev) => {
-          const safePrev = prev ?? {};
-          if (
-            (safePrev.executionState === "CANCELLED" ||
-              safePrev.executionState === "CANCELLING") &&
-            safePrev.status === "stopped"
-          ) {
-            return safePrev;
-          }
-          return {
-            ...safePrev,
-            currentAction: statusText,
             status: "working",
           };
         });

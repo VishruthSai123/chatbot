@@ -11,6 +11,12 @@ import {
 } from "@/lib/db/queries";
 import { ExecutionTracker } from "@/lib/qa/execution-tracker";
 
+const sessionCloudCheckCache = new Map<
+  string,
+  { timestamp: number; session: any }
+>();
+const CLOUD_CHECK_COOLDOWN_MS = 15_000;
+
 export async function GET(request: Request) {
   const session = await auth();
 
@@ -43,34 +49,56 @@ export async function GET(request: Request) {
     let cloudScreenHeight: number | undefined;
     if (testSession.browserSessionId && testSession.status === "active") {
       try {
-        const client = getBrowserUseClient();
-        let cloudSession: any = null;
-        try {
-          cloudSession = await client.sessions.get(
-            testSession.browserSessionId
-          );
-        } catch (fetchErr: any) {
-          // Bounded retry on network glitch
-          const isTransient =
-            fetchErr?.message?.includes("fetch") ||
-            fetchErr?.message?.includes("network") ||
-            fetchErr?.message?.includes("timeout") ||
-            fetchErr?.code === "ECONNRESET";
-          if (isTransient) {
-            await new Promise((r) => setTimeout(r, 500));
-            cloudSession = await client.sessions
-              .get(testSession.browserSessionId)
-              .catch(() => null);
-          } else if (
-            fetchErr?.status === 404 ||
-            fetchErr?.message?.includes("not found")
-          ) {
-            // Truly terminated on cloud
-            currentStatus = "completed";
-            await updateTestSessionStatus({
-              id: testSession.id,
-              status: "completed",
-            }).catch(() => null);
+        const cached = sessionCloudCheckCache.get(testSession.browserSessionId);
+        const isFresh =
+          cached &&
+          Date.now() - cached.timestamp < CLOUD_CHECK_COOLDOWN_MS &&
+          Boolean(liveUrl);
+
+        let cloudSession: any = isFresh ? cached.session : null;
+
+        if (!isFresh) {
+          const client = getBrowserUseClient();
+          try {
+            cloudSession = await client.sessions.get(
+              testSession.browserSessionId
+            );
+            if (cloudSession) {
+              sessionCloudCheckCache.set(testSession.browserSessionId, {
+                session: cloudSession,
+                timestamp: Date.now(),
+              });
+            }
+          } catch (fetchErr: any) {
+            // Bounded retry on network glitch
+            const isTransient =
+              fetchErr?.message?.includes("fetch") ||
+              fetchErr?.message?.includes("network") ||
+              fetchErr?.message?.includes("timeout") ||
+              fetchErr?.code === "ECONNRESET";
+            if (isTransient) {
+              await new Promise((r) => setTimeout(r, 500));
+              cloudSession = await client.sessions
+                .get(testSession.browserSessionId)
+                .catch(() => null);
+              if (cloudSession) {
+                sessionCloudCheckCache.set(testSession.browserSessionId, {
+                  session: cloudSession,
+                  timestamp: Date.now(),
+                });
+              }
+            } else if (
+              fetchErr?.status === 404 ||
+              fetchErr?.message?.includes("not found")
+            ) {
+              // Truly terminated on cloud
+              sessionCloudCheckCache.delete(testSession.browserSessionId);
+              currentStatus = "completed";
+              await updateTestSessionStatus({
+                id: testSession.id,
+                status: "completed",
+              }).catch(() => null);
+            }
           }
         }
 
@@ -242,6 +270,9 @@ export async function POST(request: Request) {
     if (action === "resume") {
       const resumedRun = await ExecutionTracker.resumeRun({ chatId });
       const testSession = await getTestSessionByChatId({ chatId });
+      if (testSession?.browserSessionId) {
+        sessionCloudCheckCache.delete(testSession.browserSessionId);
+      }
       return Response.json({
         execution: resumedRun,
         session: testSession,
@@ -256,6 +287,9 @@ export async function POST(request: Request) {
         reason: reason || "user_stopped",
       });
       const testSession = await getTestSessionByChatId({ chatId });
+      if (testSession?.browserSessionId) {
+        sessionCloudCheckCache.delete(testSession.browserSessionId);
+      }
       return Response.json({
         execution: cancelledRun,
         session: testSession,
@@ -311,6 +345,10 @@ export async function DELETE(request: Request) {
       chatId,
       reason: "user_stopped",
     });
+
+    if (cancelledRun?.browserSessionId) {
+      sessionCloudCheckCache.delete(cancelledRun.browserSessionId);
+    }
 
     // Safely stop browser session (only destroy cloud instance if terminate=true requested)
     const result = await stopBrowserSession({
