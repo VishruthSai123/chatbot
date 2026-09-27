@@ -51,6 +51,24 @@ export interface RunBrowserTaskResult {
 }
 
 /**
+ * Checks whether a given Browser Use session exists and is currently active on cloud.
+ */
+export async function isBrowserSessionUsable(
+  browserSessionId?: string | null
+): Promise<boolean> {
+  if (!browserSessionId) {
+    return false;
+  }
+  try {
+    const client = getBrowserUseClient();
+    const liveSession = await client.sessions.get(browserSessionId);
+    return Boolean(liveSession && liveSession.status === "active");
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Retrieves an active browser session for the given chatId, or creates a new one
  * on Browser Use Cloud with liveUrl and keeps it alive for multi-turn test persistence.
  */
@@ -60,19 +78,22 @@ export async function getOrCreateBrowserSession({
   projectId,
   browserScreenWidth,
   browserScreenHeight,
+  forceNew = false,
 }: {
   chatId: string;
   targetUrl: string;
   projectId?: string;
   browserScreenWidth?: number;
   browserScreenHeight?: number;
+  forceNew?: boolean;
 }): Promise<ActiveBrowserSession> {
   const client = getBrowserUseClient();
 
-  // 1. Check if a TestSession record already exists for this chat
+  // 1. Check if a TestSession record already exists for this chat (unless forced fresh)
   const existing = await getTestSessionByChatId({ chatId });
 
   if (
+    !forceNew &&
     existing?.browserSessionId &&
     existing.status !== "completed" &&
     existing.status !== "error"
@@ -83,6 +104,7 @@ export async function getOrCreateBrowserSession({
       // Reuse existing active session for the same target application
       try {
         let liveSession: any = null;
+        let isNotFound = false;
         try {
           liveSession = await client.sessions.get(existing.browserSessionId);
         } catch (fetchErr: any) {
@@ -102,6 +124,7 @@ export async function getOrCreateBrowserSession({
           ) {
             // Truly terminated on cloud
             liveSession = null;
+            isNotFound = true;
           } else {
             throw fetchErr;
           }
@@ -127,9 +150,19 @@ export async function getOrCreateBrowserSession({
             `[BrowserUse] Existing session ${existing.browserSessionId} is ${liveSession.status}. Marking completed in DB.`
           );
           await updateTestSessionStatus({
+            force: true,
             id: existing.id,
             status: "completed",
           });
+        } else if (isNotFound) {
+          console.log(
+            `[BrowserUse] Existing session ${existing.browserSessionId} was not found on cloud (terminated/expired). Marking completed in DB.`
+          );
+          await updateTestSessionStatus({
+            force: true,
+            id: existing.id,
+            status: "completed",
+          }).catch(() => null);
         } else if (!liveSession) {
           // Fallback: If network check was inconclusive, preserve existing session record to avoid duplicating actions
           return {
@@ -506,4 +539,48 @@ export async function stopBrowserSession({
 export async function getSessionDetails(browserSessionId: string) {
   const client = getBrowserUseClient();
   return await client.sessions.get(browserSessionId);
+}
+
+/**
+ * Creates a fresh browser session for the given chat, terminating any prior session.
+ */
+export async function restartBrowserSession({
+  chatId,
+  targetUrl,
+  projectId,
+  browserScreenWidth,
+  browserScreenHeight,
+}: {
+  chatId: string;
+  targetUrl?: string;
+  projectId?: string;
+  browserScreenWidth?: number;
+  browserScreenHeight?: number;
+}): Promise<ActiveBrowserSession> {
+  const existing = await getTestSessionByChatId({ chatId });
+  const resolvedTarget =
+    targetUrl || existing?.targetUrl || "https://google.com";
+
+  if (existing?.browserSessionId) {
+    try {
+      const client = getBrowserUseClient();
+      await client.sessions.stop(existing.browserSessionId);
+    } catch {
+      /* ignore if already stopped or dead */
+    }
+    await updateTestSessionStatus({
+      force: true,
+      id: existing.id,
+      status: "completed",
+    }).catch(() => null);
+  }
+
+  return await getOrCreateBrowserSession({
+    browserScreenHeight,
+    browserScreenWidth,
+    chatId,
+    forceNew: true,
+    projectId: (projectId || existing?.projectId) ?? undefined,
+    targetUrl: resolvedTarget,
+  });
 }

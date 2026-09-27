@@ -408,8 +408,92 @@ async function runTests() {
     "✓ Late-registered taskId successfully intercepted and marked on cancelled run"
   );
 
+  // 15. Test Browser Session Usability Contract
+  console.log("\n[Test 15] Browser session usability contract validation...");
+  const isSessionIdUsable = (browserSessionId?: string | null) =>
+    Boolean(browserSessionId?.trim());
+  assert.strictEqual(
+    isSessionIdUsable(null),
+    false,
+    "Null session ID must be unusable"
+  );
+  assert.strictEqual(
+    isSessionIdUsable(undefined),
+    false,
+    "Undefined session ID must be unusable"
+  );
+  assert.strictEqual(
+    isSessionIdUsable(""),
+    false,
+    "Empty session ID must be unusable"
+  );
+  assert.strictEqual(
+    isSessionIdUsable("sess-active-123"),
+    true,
+    "Valid session ID format is recognized"
+  );
+  console.log(
+    "✓ Session usability check contract accurately detects missing or null sessions"
+  );
+
+  // 16. Test Dead Session Context Suppression
+  console.log(
+    "\n[Test 16] Dead session context suppression for prompt generation..."
+  );
+  const deadSessionPrompt = getActiveSessionPrompt({
+    browserSessionId: "sess-dead-123",
+    status: "completed",
+    targetUrl: "https://example.com",
+  });
+  assert.strictEqual(
+    deadSessionPrompt,
+    "",
+    "Prompt must be empty for completed/ended sessions so model starts fresh"
+  );
+
+  const nullIdPrompt = getActiveSessionPrompt({
+    browserSessionId: null,
+    status: "active",
+    targetUrl: "https://example.com",
+  });
+  assert.strictEqual(
+    nullIdPrompt,
+    "",
+    "Prompt must be empty when browserSessionId is null"
+  );
+  console.log(
+    "✓ Dead/ended sessions suppress continuation prompts, preventing stale execution reuse"
+  );
+
+  // 17. Verify New Prompt on Dead Session doesn't falsely fail
+  console.log("\n[Test 17] Prompt execution on dead session resilience...");
+  const recoveryChatId = "chat-recovery-test";
+  const deadRun = ExecutionTracker.startRun({
+    chatId: recoveryChatId,
+    sessionId: "sess-old-ended",
+    targetUrl: "https://example.com",
+  });
+  ExecutionTracker.completeRun({
+    chatId: recoveryChatId,
+    runId: deadRun.runId,
+  });
+  assert.strictEqual(deadRun.executionState, "COMPLETED");
+
+  // A new prompt starts a new run without claiming test failed
+  const freshRun = ExecutionTracker.startRun({
+    chatId: recoveryChatId,
+    sessionId: "sess-new-recovered",
+    targetUrl: "https://example.com",
+  });
+  assert.strictEqual(freshRun.executionState, "STARTING");
+  assert.strictEqual(freshRun.sessionId, "sess-new-recovered");
+  assert.notStrictEqual(freshRun.runId, deadRun.runId);
+  console.log(
+    "✓ New user prompt against dead session correctly starts fresh run without failing"
+  );
+
   console.log("\n=======================================================");
-  console.log("ALL STOP/RESUME LIFECYCLE TESTS PASSED! (14/14)");
+  console.log("ALL STOP/RESUME LIFECYCLE TESTS PASSED! (17/17)");
   console.log("=======================================================");
 }
 

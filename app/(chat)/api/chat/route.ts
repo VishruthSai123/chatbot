@@ -30,7 +30,10 @@ import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
 import { runBrowserStep } from "@/lib/ai/tools/run-browser-step";
 import { startTestSession } from "@/lib/ai/tools/start-test-session";
 import { updateDocument } from "@/lib/ai/tools/update-document";
-import { stopBrowserSession } from "@/lib/browser-use/session";
+import {
+  isBrowserSessionUsable,
+  stopBrowserSession,
+} from "@/lib/browser-use/session";
 import { isProductionEnvironment } from "@/lib/constants";
 import {
   createStreamId,
@@ -221,6 +224,21 @@ export async function POST(request: Request) {
       ) {
         await ExecutionTracker.resumeRun({ chatId: id });
       }
+      if (activeTestSession?.browserSessionId) {
+        const isUsable = await isBrowserSessionUsable(
+          activeTestSession.browserSessionId
+        );
+        if (!isUsable) {
+          await updateTestSessionStatus({
+            force: true,
+            id: activeTestSession.id,
+            status: "completed",
+          }).catch(() => null);
+          activeTestSession.browserSessionId = null;
+          activeTestSession.status = "completed";
+        }
+      }
+
       if (activeTestSession?.status === "cancelled") {
         await updateTestSessionStatus({
           force: true,

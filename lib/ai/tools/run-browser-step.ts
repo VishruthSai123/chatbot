@@ -1,6 +1,11 @@
 import { tool, type UIMessageStreamWriter } from "ai";
 import { z } from "zod";
-import { runBrowserTask } from "@/lib/browser-use/session";
+import {
+  isBrowserSessionUsable,
+  type RunBrowserTaskResult,
+  restartBrowserSession,
+  runBrowserTask,
+} from "@/lib/browser-use/session";
 import { ExecutionTracker } from "@/lib/qa/execution-tracker";
 import type { ChatMessage } from "@/lib/types";
 
@@ -50,6 +55,42 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
           };
         }
 
+        // Ensure session is alive and usable before launching task
+        let effectiveSessionId = browserSessionId;
+        const isSessionAlive = await isBrowserSessionUsable(effectiveSessionId);
+
+        if (!isSessionAlive) {
+          console.log(
+            `[runBrowserStep] Session ${effectiveSessionId} is ended or unreachable. Recovering with fresh session...`
+          );
+          dataStream.write({
+            data: "Restoring browser session...",
+            transient: true,
+            type: "data-qa-status",
+          });
+
+          const recoveredSession = await restartBrowserSession({
+            chatId,
+            targetUrl: existingSession?.targetUrl,
+          });
+
+          effectiveSessionId = recoveredSession.browserSessionId;
+
+          dataStream.write({
+            data: {
+              browserScreenHeight: recoveredSession.browserScreenHeight,
+              browserScreenWidth: recoveredSession.browserScreenWidth,
+              browserSessionId: recoveredSession.browserSessionId,
+              id: recoveredSession.id,
+              liveUrl: recoveredSession.liveUrl ?? "",
+              status: "live",
+              targetUrl: recoveredSession.targetUrl,
+            },
+            transient: true,
+            type: "data-browser-session",
+          });
+        }
+
         // Ensure run is active in tracker
         if (
           !activeRun ||
@@ -59,9 +100,9 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
           activeRun.executionState === "RESUMING"
         ) {
           activeRun = ExecutionTracker.startRun({
-            browserSessionId,
+            browserSessionId: effectiveSessionId,
             chatId,
-            sessionId: existingSession?.id || browserSessionId,
+            sessionId: existingSession?.id || effectiveSessionId,
             targetUrl: existingSession?.targetUrl || "https://localhost",
           });
         }
@@ -95,87 +136,146 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
 
         let stepCount = 0;
 
-        const result = await runBrowserTask({
-          instruction,
-          isCancelled: () => ExecutionTracker.isCancelRequested(chatId),
-          onHeartbeat: (elapsedSeconds) => {
-            // Keep SSE connection alive on long steps without spamming state or overwriting action text
-            if (elapsedSeconds > 0 && elapsedSeconds % 15 === 0) {
+        const executeTaskWithSession = async (sessId: string) => {
+          return await runBrowserTask({
+            instruction,
+            isCancelled: () => ExecutionTracker.isCancelRequested(chatId),
+            onHeartbeat: (elapsedSeconds) => {
+              // Keep SSE connection alive on long steps without spamming state or overwriting action text
+              if (elapsedSeconds > 0 && elapsedSeconds % 15 === 0) {
+                dataStream.write({
+                  data: "Executing browser action...",
+                  transient: true,
+                  type: "data-qa-status",
+                });
+              }
+            },
+            onStep: (step) => {
+              stepCount += 1;
+
+              const rawAction =
+                (typeof step.nextGoal === "string" && step.nextGoal.trim()) ||
+                (typeof step.evaluationPreviousGoal === "string" &&
+                  step.evaluationPreviousGoal.trim()) ||
+                (typeof (step as any).output === "string" &&
+                  (step as any).output.trim()) ||
+                `Step ${stepCount}`;
+
+              const safeAction = rawAction || `Step ${stepCount}`;
+              const urlText =
+                (step as any).url ?? (step as any).currentUrl ?? undefined;
+
+              // Update authoritative execution tracker
+              const updatedRun = ExecutionTracker.updateStep({
+                action: safeAction,
+                chatId,
+                number: stepCount,
+                status: "running",
+                url: urlText,
+              });
+
+              // Stream status and step delta
               dataStream.write({
-                data: "Executing browser action...",
+                data: safeAction,
                 transient: true,
                 type: "data-qa-status",
               });
-            }
-          },
-          onStep: (step) => {
-            stepCount += 1;
 
-            const rawAction =
-              (typeof step.nextGoal === "string" && step.nextGoal.trim()) ||
-              (typeof step.evaluationPreviousGoal === "string" &&
-                step.evaluationPreviousGoal.trim()) ||
-              (typeof (step as any).output === "string" &&
-                (step as any).output.trim()) ||
-              `Step ${stepCount}`;
+              dataStream.write({
+                data: {
+                  action: safeAction,
+                  number: stepCount,
+                  status: "running" as const,
+                  url: urlText,
+                },
+                transient: true,
+                type: "data-qa-step",
+              });
 
-            const safeAction = rawAction || `Step ${stepCount}`;
-            const urlText =
-              (step as any).url ?? (step as any).currentUrl ?? undefined;
+              // Stream full execution snapshot
+              if (updatedRun) {
+                dataStream.write({
+                  data: {
+                    currentAction: safeAction,
+                    currentStep: stepCount,
+                    executionState: updatedRun.executionState,
+                    lastActivityAt: updatedRun.lastActivityAt,
+                    runId: updatedRun.runId,
+                    sequence: updatedRun.sequence,
+                    sessionId: updatedRun.sessionId,
+                    startedAt: updatedRun.startedAt,
+                    steps: updatedRun.steps,
+                  },
+                  transient: true,
+                  type: "data-qa-execution",
+                });
+              }
+            },
+            onTaskId: (taskId) => {
+              if (activeRun) {
+                ExecutionTracker.setActiveTaskId(
+                  chatId,
+                  activeRun.runId,
+                  taskId
+                );
+              }
+            },
+            sessionId: sessId,
+          });
+        };
 
-            // Update authoritative execution tracker
-            const updatedRun = ExecutionTracker.updateStep({
-              action: safeAction,
-              chatId,
-              number: stepCount,
-              status: "running",
-              url: urlText,
-            });
+        let result: RunBrowserTaskResult;
+        try {
+          result = await executeTaskWithSession(effectiveSessionId);
+        } catch (firstErr) {
+          const firstMsg =
+            firstErr instanceof Error ? firstErr.message : String(firstErr);
+          const isSessionDead =
+            firstMsg.toLowerCase().includes("session") &&
+            (firstMsg.toLowerCase().includes("not found") ||
+              firstMsg.toLowerCase().includes("stopped") ||
+              firstMsg.toLowerCase().includes("expired") ||
+              firstMsg.toLowerCase().includes("inactive") ||
+              firstMsg.toLowerCase().includes("ended") ||
+              firstMsg.toLowerCase().includes("closed") ||
+              firstMsg.toLowerCase().includes("404"));
 
-            // Stream status and step delta
+          if (isSessionDead && !ExecutionTracker.isCancelRequested(chatId)) {
+            console.log(
+              `[runBrowserStep] Session ${effectiveSessionId} died during execution. Restarting browser and retrying prompt...`
+            );
             dataStream.write({
-              data: safeAction,
+              data: "Session ended. Restarting browser session...",
               transient: true,
               type: "data-qa-status",
             });
 
-            dataStream.write({
-              data: {
-                action: safeAction,
-                number: stepCount,
-                status: "running" as const,
-                url: urlText,
-              },
-              transient: true,
-              type: "data-qa-step",
+            const freshSession = await restartBrowserSession({
+              chatId,
+              targetUrl: existingSession?.targetUrl,
             });
 
-            // Stream full execution snapshot
-            if (updatedRun) {
-              dataStream.write({
-                data: {
-                  currentAction: safeAction,
-                  currentStep: stepCount,
-                  executionState: updatedRun.executionState,
-                  lastActivityAt: updatedRun.lastActivityAt,
-                  runId: updatedRun.runId,
-                  sequence: updatedRun.sequence,
-                  sessionId: updatedRun.sessionId,
-                  startedAt: updatedRun.startedAt,
-                  steps: updatedRun.steps,
-                },
-                transient: true,
-                type: "data-qa-execution",
-              });
-            }
-          },
-          onTaskId: (taskId) => {
-            if (activeRun) {
-              ExecutionTracker.setActiveTaskId(chatId, activeRun.runId, taskId);
-            }
-          },
-          sessionId: browserSessionId,
-        });
+            dataStream.write({
+              data: {
+                browserScreenHeight: freshSession.browserScreenHeight,
+                browserScreenWidth: freshSession.browserScreenWidth,
+                browserSessionId: freshSession.browserSessionId,
+                id: freshSession.id,
+                liveUrl: freshSession.liveUrl ?? "",
+                status: "live",
+                targetUrl: freshSession.targetUrl,
+              },
+              transient: true,
+              type: "data-browser-session",
+            });
+
+            result = await executeTaskWithSession(
+              freshSession.browserSessionId
+            );
+          } else {
+            throw firstErr;
+          }
+        }
 
         // If task was stopped/cancelled by user
         if (result.isStopped || ExecutionTracker.isCancelRequested(chatId)) {

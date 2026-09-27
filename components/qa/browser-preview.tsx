@@ -7,7 +7,9 @@ import {
   Loader2,
   Maximize2,
   Minimize2,
+  MonitorOff,
   Play,
+  RotateCcw,
   RotateCw,
   Square,
   X,
@@ -83,6 +85,9 @@ export function BrowserPreview({
   const [iframeKey, setIframeKey] = useState<number>(0);
   const [isStopping, setIsStopping] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
+  const isRestartingRef = useRef(false);
+  const activeBrowserSessionIdRef = useRef<string | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -160,9 +165,10 @@ export function BrowserPreview({
       browserSessionId: string;
       browserScreenHeight?: number;
       browserScreenWidth?: number;
+      isEnded?: boolean;
       liveUrl: string | null;
-      targetUrl: string;
       status: string;
+      targetUrl: string;
     } | null;
     execution: any;
   }>(sessionQuery, fetcher, {
@@ -187,6 +193,10 @@ export function BrowserPreview({
     revalidateOnReconnect: true,
     shouldRetryOnError: true,
   });
+
+  if (sessionData?.session?.browserSessionId && !isRestartingRef.current) {
+    activeBrowserSessionIdRef.current = sessionData.session.browserSessionId;
+  }
 
   const isBackendActive =
     sessionData?.execution?.executionState === "STARTING" ||
@@ -217,6 +227,22 @@ export function BrowserPreview({
 
   // Sync DB session and execution into metadata if found
   useEffect(() => {
+    if (isRestartingRef.current) {
+      return;
+    }
+
+    if (sessionData?.session?.isEnded && setMetadata) {
+      setMetadata((prev) => {
+        if (!prev?.liveUrl) {
+          return prev ?? {};
+        }
+        return {
+          ...prev,
+          liveUrl: undefined,
+        };
+      });
+    }
+
     if (sessionData?.session?.liveUrl && setMetadata) {
       const s = sessionData.session;
       const exec = sessionData.execution;
@@ -307,7 +333,16 @@ export function BrowserPreview({
     }
   }, [sessionData, setMetadata]);
 
-  const liveUrl = metadata?.liveUrl ?? sessionData?.session?.liveUrl ?? null;
+  const isSessionEnded = Boolean(
+    sessionData?.session?.isEnded &&
+      !isExecuting &&
+      !isResuming &&
+      !isRestarting
+  );
+
+  const liveUrl = isSessionEnded
+    ? null
+    : (metadata?.liveUrl ?? sessionData?.session?.liveUrl ?? null);
   const targetUrl =
     metadata?.targetUrl ??
     sessionData?.session?.targetUrl ??
@@ -445,6 +480,73 @@ export function BrowserPreview({
     }
   }, [chatId, isResuming, mutateSession, setMetadata]);
 
+  const handleRestartBrowser = useCallback(async () => {
+    if (!chatId || isRestartingRef.current) {
+      return;
+    }
+    isRestartingRef.current = true;
+    setIsRestarting(true);
+
+    try {
+      const res = await fetch("/api/qa/session", {
+        body: JSON.stringify({
+          action: "restart",
+          browserScreenHeight: browserDimensions?.height,
+          browserScreenWidth: browserDimensions?.width,
+          chatId,
+          targetUrl,
+        }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+
+      if (!res.ok) {
+        throw new Error("Failed to restart browser session");
+      }
+
+      const data = await res.json();
+      if (data?.session) {
+        const newSession = data.session;
+        activeBrowserSessionIdRef.current = newSession.browserSessionId;
+
+        // Synchronously update SWR cache so neither preview nor chat shell flashes stale state
+        await mutateSession(
+          (prev) => ({
+            execution: prev?.execution ?? null,
+            finding: prev?.finding,
+            session: {
+              ...(prev?.session ?? {}),
+              ...newSession,
+              isEnded: false,
+              liveUrl: newSession.liveUrl,
+              status: "active",
+            },
+          }),
+          false
+        );
+
+        setMetadata?.((prev) => ({
+          ...(prev ?? {}),
+          browserScreenHeight:
+            newSession.browserScreenHeight ?? prev?.browserScreenHeight,
+          browserScreenWidth:
+            newSession.browserScreenWidth ?? prev?.browserScreenWidth,
+          browserSessionId: newSession.browserSessionId,
+          errorMessage: undefined,
+          liveUrl: newSession.liveUrl ?? undefined,
+          status: "live",
+        }));
+
+        setIframeKey((k) => k + 1);
+      }
+    } catch (err) {
+      console.error("[BrowserPreview] Error restarting browser session:", err);
+    } finally {
+      setIsRestarting(false);
+      isRestartingRef.current = false;
+    }
+  }, [chatId, browserDimensions, targetUrl, mutateSession, setMetadata]);
+
   useEffect(() => {
     const handleRemoteCancelling = (e: Event) => {
       const customEvent = e as CustomEvent<{ chatId: string }>;
@@ -556,6 +658,11 @@ export function BrowserPreview({
                   <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
                   Reconnecting…
                 </span>
+              ) : isRestarting ? (
+                <span className="flex items-center gap-1 font-medium text-blue-500">
+                  <span className="size-1.5 animate-pulse rounded-full bg-blue-500" />
+                  Starting session…
+                </span>
               ) : isStopping || metadata?.executionState === "CANCELLING" ? (
                 <span className="flex items-center gap-1 font-medium text-amber-500">
                   <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
@@ -565,6 +672,11 @@ export function BrowserPreview({
                 <span className="flex items-center gap-1 font-medium text-blue-500">
                   <span className="size-1.5 animate-pulse rounded-full bg-blue-500" />
                   Resuming…
+                </span>
+              ) : isSessionEnded ? (
+                <span className="flex items-center gap-1 font-medium text-muted-foreground">
+                  <span className="size-1.5 rounded-full bg-muted-foreground/60" />
+                  Ended
                 </span>
               ) : status === "live" ? (
                 <span className="flex items-center gap-1 font-medium text-emerald-500">
@@ -663,7 +775,8 @@ export function BrowserPreview({
           </Tooltip>
 
           {/* STOP CONTROL */}
-          {(status === "live" || status === "working" || isStopping) &&
+          {!isSessionEnded &&
+            (status === "live" || status === "working" || isStopping) &&
             metadata?.executionState !== "CANCELLED" &&
             metadata?.executionState !== "COMPLETED" && (
               <Tooltip>
@@ -696,9 +809,10 @@ export function BrowserPreview({
             )}
 
           {/* RESUME CONTROL */}
-          {(metadata?.executionState === "CANCELLED" ||
-            metadata?.executionState === "PAUSED" ||
-            status === "stopped") &&
+          {!isSessionEnded &&
+            (metadata?.executionState === "CANCELLED" ||
+              metadata?.executionState === "PAUSED" ||
+              status === "stopped") &&
             metadata?.executionState !== "COMPLETED" && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -784,21 +898,52 @@ export function BrowserPreview({
               : undefined
           }
         >
-          {liveUrl ? (
+          {isSessionEnded ? (
+            <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center animate-in fade-in-0 zoom-in-95 duration-200">
+              <div className="flex size-10 items-center justify-center rounded-xl border border-border/50 bg-muted/40 text-muted-foreground shadow-xs">
+                <MonitorOff className="size-5 opacity-70" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <p className="text-sm font-medium text-foreground">
+                  Browser session ended
+                </p>
+                <p className="text-xs text-muted-foreground max-w-xs">
+                  Start a new session to continue testing.
+                </p>
+              </div>
+              <Button
+                className="mt-1 h-8 px-3 text-xs gap-1.5"
+                disabled={isRestarting}
+                onClick={handleRestartBrowser}
+                size="sm"
+              >
+                {isRestarting ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="size-3.5" />
+                )}
+                <span>
+                  {isRestarting ? "Starting session..." : "Restart browser"}
+                </span>
+              </Button>
+            </div>
+          ) : liveUrl ? (
             <iframe
               allow="clipboard-read; clipboard-write"
-              className="absolute inset-0 block h-full w-full border-0 bg-background"
+              className="absolute inset-0 block h-full w-full border-0 bg-background animate-in fade-in-0 zoom-in-95 duration-200"
               key={iframeKey}
               src={liveUrl}
               title="Live Browser Session"
             />
-          ) : status === "connecting" || isSessionFetching ? (
-            <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center">
+          ) : status === "connecting" || isSessionFetching || isRestarting ? (
+            <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center animate-in fade-in-0 zoom-in-95 duration-200">
               <Shimmer
                 className="text-sm font-medium text-foreground whitespace-normal break-words"
                 duration={1.5}
               >
-                Connecting to live browser session...
+                {isRestarting
+                  ? "Starting new browser session..."
+                  : "Connecting to live browser session..."}
               </Shimmer>
               <p className="text-xs text-muted-foreground max-w-sm">
                 Spawning cloud browser instance for {displayHost}...

@@ -2,6 +2,7 @@ import { auth } from "@/app/(auth)/auth";
 import { getBrowserUseClient } from "@/lib/browser-use/client";
 import {
   getOrCreateBrowserSession,
+  restartBrowserSession,
   stopBrowserSession,
 } from "@/lib/browser-use/session";
 import {
@@ -44,10 +45,14 @@ export async function GET(request: Request) {
     const { status: initialStatus, liveUrl: initialLiveUrl } = testSession;
     let currentStatus = initialStatus;
     let liveUrl = initialLiveUrl;
+    let isEnded =
+      initialStatus === "completed" ||
+      initialStatus === "cancelled" ||
+      initialStatus === "error";
 
     let cloudScreenWidth: number | undefined;
     let cloudScreenHeight: number | undefined;
-    if (testSession.browserSessionId && testSession.status === "active") {
+    if (testSession.browserSessionId) {
       try {
         const cached = sessionCloudCheckCache.get(testSession.browserSessionId);
         const isFresh =
@@ -94,6 +99,7 @@ export async function GET(request: Request) {
               // Truly terminated on cloud
               sessionCloudCheckCache.delete(testSession.browserSessionId);
               currentStatus = "completed";
+              isEnded = true;
               await updateTestSessionStatus({
                 id: testSession.id,
                 status: "completed",
@@ -104,11 +110,13 @@ export async function GET(request: Request) {
 
         if (cloudSession && cloudSession.status !== "active") {
           currentStatus = "completed";
+          isEnded = true;
           await updateTestSessionStatus({
             id: testSession.id,
             status: "completed",
           });
         } else if (cloudSession) {
+          isEnded = false;
           cloudScreenWidth =
             (cloudSession as any).browserScreenWidth ?? undefined;
           cloudScreenHeight =
@@ -229,7 +237,8 @@ export async function GET(request: Request) {
         browserSessionId: testSession.browserSessionId,
         chatId: testSession.chatId,
         id: testSession.id,
-        liveUrl,
+        isEnded: Boolean(isEnded && testSession.browserSessionId),
+        liveUrl: isEnded ? null : liveUrl,
         status: currentStatus,
         targetUrl: testSession.targetUrl,
       },
@@ -264,6 +273,44 @@ export async function POST(request: Request) {
 
     if (!chatId) {
       return Response.json({ error: "chatId is required" }, { status: 400 });
+    }
+
+    // Handle explicit restart action
+    if (action === "restart") {
+      const existing = await getTestSessionByChatId({ chatId });
+      const resolvedTarget =
+        targetUrl || existing?.targetUrl || "https://google.com";
+
+      const browserSession = await restartBrowserSession({
+        browserScreenHeight,
+        browserScreenWidth,
+        chatId,
+        projectId,
+        targetUrl: resolvedTarget,
+      });
+
+      if (existing?.browserSessionId) {
+        sessionCloudCheckCache.delete(existing.browserSessionId);
+      }
+      if (browserSession.browserSessionId) {
+        sessionCloudCheckCache.set(browserSession.browserSessionId, {
+          session: {
+            id: browserSession.browserSessionId,
+            liveUrl: browserSession.liveUrl,
+            status: "active",
+          },
+          timestamp: Date.now(),
+        });
+      }
+
+      return Response.json({
+        session: {
+          ...browserSession,
+          isEnded: false,
+          status: "active",
+        },
+        success: true,
+      });
     }
 
     // Handle explicit resume action
