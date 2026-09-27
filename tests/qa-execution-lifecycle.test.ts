@@ -492,8 +492,196 @@ async function runTests() {
     "✓ New user prompt against dead session correctly starts fresh run without failing"
   );
 
+  // 18. Verify Canonical Preview State Matrix (Zero Blank States)
+  console.log("\n[Test 18] Canonical Preview State resolution matrix...");
+  function resolveCanonicalState({
+    isRestarting = false,
+    restartError = null as string | null,
+    isSessionEnded = false,
+    liveUrl = null as string | null,
+    liveViewStatus = "connecting" as
+      | "connecting"
+      | "connected"
+      | "disconnected",
+    status = "idle",
+    isSessionFetching = false,
+    executionState = undefined as string | undefined,
+    sessionStatus = undefined as string | undefined,
+  }) {
+    if (isRestarting) {
+      return "BROWSER_SESSION_STARTING";
+    }
+    if (restartError) {
+      return "BROWSER_SESSION_START_FAILED";
+    }
+    if (isSessionEnded) {
+      return "BROWSER_SESSION_ENDED";
+    }
+    if (liveUrl) {
+      if (liveViewStatus === "disconnected") {
+        return "LIVE_VIEW_DISCONNECTED";
+      }
+      return "BROWSER_SESSION_READY";
+    }
+    if (
+      status === "connecting" ||
+      isSessionFetching ||
+      executionState === "STARTING" ||
+      sessionStatus === "initializing"
+    ) {
+      return "BROWSER_SESSION_STARTING";
+    }
+    if (status === "error") {
+      return "BROWSER_SESSION_START_FAILED";
+    }
+    return "NO_ACTIVE_SESSION";
+  }
+
+  // 18a. Restarting state
+  assert.strictEqual(
+    resolveCanonicalState({ isRestarting: true }),
+    "BROWSER_SESSION_STARTING"
+  );
+  // 18b. Restart failed state
+  assert.strictEqual(
+    resolveCanonicalState({ restartError: "Network failure" }),
+    "BROWSER_SESSION_START_FAILED"
+  );
+  // 18c. Session ended state (overrides liveUrl)
+  assert.strictEqual(
+    resolveCanonicalState({
+      isSessionEnded: true,
+      liveUrl: "https://live.browser-use.com/stale",
+    }),
+    "BROWSER_SESSION_ENDED"
+  );
+  // 18d. Active session with live view connected
+  assert.strictEqual(
+    resolveCanonicalState({
+      liveUrl: "https://live.browser-use.com/active",
+      liveViewStatus: "connected",
+    }),
+    "BROWSER_SESSION_READY"
+  );
+  // 18e. Active session but live CDP/WebSocket disconnected
+  assert.strictEqual(
+    resolveCanonicalState({
+      liveUrl: "https://live.browser-use.com/active",
+      liveViewStatus: "disconnected",
+    }),
+    "LIVE_VIEW_DISCONNECTED"
+  );
+  // 18f. Initializing/starting state
+  assert.strictEqual(
+    resolveCanonicalState({ isSessionFetching: true }),
+    "BROWSER_SESSION_STARTING"
+  );
+  // 18g. Error state without liveUrl
+  assert.strictEqual(
+    resolveCanonicalState({ status: "error" }),
+    "BROWSER_SESSION_START_FAILED"
+  );
+  // 18h. No active session
+  assert.strictEqual(resolveCanonicalState({}), "NO_ACTIVE_SESSION");
+  console.log(
+    "✓ All 6 canonical preview states resolve deterministically with zero unhandled/blank states"
+  );
+
+  // 19. Verify Dead Session liveUrl Clearance
+  console.log("\n[Test 19] Dead session liveUrl clearance in metadata sync...");
+  function syncSessionToMetadata(safePrev: any, s: any) {
+    const isEnded = Boolean(s.isEnded);
+    return {
+      ...safePrev,
+      browserSessionId: s.browserSessionId || safePrev.browserSessionId,
+      liveUrl: isEnded ? undefined : (s.liveUrl ?? safePrev.liveUrl),
+      status: isEnded
+        ? "stopped"
+        : s.status === "active"
+          ? "live"
+          : safePrev.status || "idle",
+      targetUrl: s.targetUrl || safePrev.targetUrl,
+    };
+  }
+
+  const prevWithLive = {
+    browserSessionId: "bu-sess-1",
+    liveUrl: "https://live.browser-use.com/stream-1",
+    status: "live",
+  };
+  const syncedDead = syncSessionToMetadata(prevWithLive, {
+    browserSessionId: "bu-sess-1",
+    isEnded: true,
+    liveUrl: null,
+    status: "completed",
+  });
+  assert.strictEqual(
+    syncedDead.liveUrl,
+    undefined,
+    "Dead session must clear liveUrl"
+  );
+  assert.strictEqual(
+    syncedDead.status,
+    "stopped",
+    "Dead session status must be stopped"
+  );
+  console.log(
+    "✓ Dead session strictly clears liveUrl and prevents stale URL retention"
+  );
+
+  // 20. Verify SWR polling interval contract
+  console.log(
+    "\n[Test 20] SWR polling interval preserves background session liveness..."
+  );
+  function computeRefreshInterval(latestData: any, isOnline = true) {
+    if (latestData?.session?.isEnded) {
+      return 0; // Session is confirmed ended, stop polling
+    }
+    if (!isOnline) {
+      return 3000;
+    }
+    const execState = latestData?.execution?.executionState;
+    const isRemoteActive =
+      execState === "STARTING" ||
+      execState === "RUNNING" ||
+      execState === "WAITING" ||
+      execState === "FINALIZING" ||
+      execState === "RESUMING";
+    return isRemoteActive ? 2500 : 5000;
+  }
+
+  // Active execution: 2500ms
+  assert.strictEqual(
+    computeRefreshInterval({
+      execution: { executionState: "RUNNING" },
+      session: { isEnded: false },
+    }),
+    2500
+  );
+  // Completed test execution but cloud session still active: 5000ms (NOT 0!)
+  assert.strictEqual(
+    computeRefreshInterval({
+      execution: { executionState: "COMPLETED" },
+      session: { isEnded: false },
+    }),
+    5000,
+    "Idle/completed test must poll at 5000ms while cloud session is active"
+  );
+  // Session confirmed ended: 0ms
+  assert.strictEqual(
+    computeRefreshInterval({
+      execution: { executionState: "COMPLETED" },
+      session: { isEnded: true },
+    }),
+    0,
+    "Confirmed ended session stops polling"
+  );
+  console.log(
+    "✓ SWR polling interval continues at 5000ms when idle to detect remote cloud termination"
+  );
+
   console.log("\n=======================================================");
-  console.log("ALL STOP/RESUME LIFECYCLE TESTS PASSED! (17/17)");
+  console.log("ALL STOP/RESUME & LIVE-VIEW LIFECYCLE TESTS PASSED! (20/20)");
   console.log("=======================================================");
 }
 

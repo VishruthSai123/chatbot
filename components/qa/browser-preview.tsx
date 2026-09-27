@@ -12,6 +12,7 @@ import {
   RotateCcw,
   RotateCw,
   Square,
+  WifiOff,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -30,6 +31,14 @@ import {
 } from "@/lib/qa/execution-types";
 import { cn, fetcher } from "@/lib/utils";
 import { Shimmer } from "../ai-elements/shimmer";
+
+export type CanonicalPreviewState =
+  | "BROWSER_SESSION_STARTING"
+  | "BROWSER_SESSION_READY"
+  | "LIVE_VIEW_DISCONNECTED"
+  | "BROWSER_SESSION_ENDED"
+  | "BROWSER_SESSION_START_FAILED"
+  | "NO_ACTIVE_SESSION";
 
 export type BrowserStatus =
   | "connecting"
@@ -148,6 +157,11 @@ export function BrowserPreview({
     return `/api/qa/session?chatId=${chatId}`;
   }, [chatId]);
 
+  const [liveViewStatus, setLiveViewStatus] = useState<
+    "connecting" | "connected" | "disconnected"
+  >("connecting");
+  const [restartError, setRestartError] = useState<string | null>(null);
+
   // Network connectivity tracking
   const [isOnline, setIsOnline] = useState(
     typeof navigator === "undefined" ? true : navigator.onLine
@@ -174,25 +188,69 @@ export function BrowserPreview({
   }>(sessionQuery, fetcher, {
     errorRetryInterval: 2500,
     refreshInterval: (latestData) => {
-      const execState = latestData?.execution?.executionState;
-      if (isTerminalExecutionState(execState)) {
+      if (latestData?.session?.isEnded) {
         return 0;
       }
       if (!isOnline) {
         return 3000;
       }
+      const execState = latestData?.execution?.executionState;
       const isRemoteActive =
         execState === "STARTING" ||
         execState === "RUNNING" ||
         execState === "WAITING" ||
         execState === "FINALIZING" ||
         execState === "RESUMING";
-      return isRemoteActive ? 2500 : 0;
+      return isRemoteActive ? 2500 : 5000;
     },
     revalidateOnFocus: true,
     revalidateOnReconnect: true,
     shouldRetryOnError: true,
   });
+
+  // Listen for live-view connection events from embedded live.browser-use.com
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      try {
+        const { data } = event;
+        if (!data) {
+          return;
+        }
+        const payload = typeof data === "string" ? JSON.parse(data) : data;
+
+        const connStatus =
+          payload?.connectionStatus ??
+          payload?.status ??
+          payload?.state ??
+          payload?.type;
+
+        if (
+          connStatus === "disconnected" ||
+          connStatus === "connection_failed" ||
+          payload?.event === "disconnected" ||
+          payload?.error?.includes?.("502") ||
+          payload?.error?.includes?.("503") ||
+          payload?.error?.includes?.("Failed to fetch version")
+        ) {
+          console.log(
+            `[BrowserPreview] Live view message received: disconnected (${payload?.error ?? connStatus})`
+          );
+          setLiveViewStatus("disconnected");
+        } else if (
+          connStatus === "connected" ||
+          connStatus === "ready" ||
+          payload?.event === "connected"
+        ) {
+          setLiveViewStatus("connected");
+        }
+      } catch {
+        // Non-JSON message from other sources, ignore
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
 
   if (sessionData?.session?.browserSessionId && !isRestartingRef.current) {
     activeBrowserSessionIdRef.current = sessionData.session.browserSessionId;
@@ -334,15 +392,12 @@ export function BrowserPreview({
   }, [sessionData, setMetadata]);
 
   const isSessionEnded = Boolean(
-    sessionData?.session?.isEnded &&
-      !isExecuting &&
-      !isResuming &&
-      !isRestarting
+    sessionData?.session?.isEnded && !isRestarting
   );
 
   const liveUrl = isSessionEnded
     ? null
-    : (metadata?.liveUrl ?? sessionData?.session?.liveUrl ?? null);
+    : (sessionData?.session?.liveUrl ?? metadata?.liveUrl ?? null);
   const targetUrl =
     metadata?.targetUrl ??
     sessionData?.session?.targetUrl ??
@@ -359,6 +414,12 @@ export function BrowserPreview({
         ? "stopped"
         : rawStatus;
   const isFullscreen = Boolean(metadata?.isFullscreen);
+
+  useEffect(() => {
+    if (liveUrl) {
+      setLiveViewStatus("connecting");
+    }
+  }, [liveUrl]);
 
   const handleToggleFullscreen = useCallback(() => {
     if (!setMetadata) {
@@ -378,16 +439,84 @@ export function BrowserPreview({
   }, [setArtifact]);
 
   const handleRetry = useCallback(() => {
+    setRestartError(null);
     mutateSession();
   }, [mutateSession]);
 
   const handleReloadIframe = useCallback(() => {
+    setLiveViewStatus("connecting");
     setIframeKey((k) => k + 1);
-  }, []);
+    mutateSession();
+  }, [mutateSession]);
+
+  const handleReconnectLiveView = useCallback(() => {
+    console.log(
+      `[BrowserRecovery] Action=reconnect_live_view, sessionId=${activeBrowserSessionIdRef.current ?? "none"}, reason=live_view_disconnected`
+    );
+    setLiveViewStatus("connecting");
+    setIframeKey((k) => k + 1);
+    mutateSession();
+  }, [mutateSession]);
 
   const handleSyncSession = useCallback(() => {
     mutateSession();
   }, [mutateSession]);
+
+  const canonicalState: CanonicalPreviewState = useMemo(() => {
+    if (isRestarting) {
+      return "BROWSER_SESSION_STARTING";
+    }
+    if (restartError) {
+      return "BROWSER_SESSION_START_FAILED";
+    }
+    if (isSessionEnded) {
+      return "BROWSER_SESSION_ENDED";
+    }
+    if (liveUrl) {
+      if (liveViewStatus === "disconnected") {
+        return "LIVE_VIEW_DISCONNECTED";
+      }
+      return "BROWSER_SESSION_READY";
+    }
+    if (
+      status === "connecting" ||
+      isSessionFetching ||
+      metadata?.executionState === "STARTING" ||
+      sessionData?.session?.status === "initializing"
+    ) {
+      return "BROWSER_SESSION_STARTING";
+    }
+    if (status === "error") {
+      return "BROWSER_SESSION_START_FAILED";
+    }
+    return "NO_ACTIVE_SESSION";
+  }, [
+    isRestarting,
+    restartError,
+    isSessionEnded,
+    liveUrl,
+    liveViewStatus,
+    status,
+    isSessionFetching,
+    metadata?.executionState,
+    sessionData?.session?.status,
+  ]);
+
+  const prevCanonicalStateRef = useRef<CanonicalPreviewState | null>(null);
+  useEffect(() => {
+    if (prevCanonicalStateRef.current !== canonicalState) {
+      prevCanonicalStateRef.current = canonicalState;
+      console.log(
+        `[BrowserPreview] sessionId=${sessionData?.session?.browserSessionId ?? metadata?.browserSessionId ?? "none"}, liveUrl=${Boolean(liveUrl)}, connectionState=${liveViewStatus}, renderState=${canonicalState}`
+      );
+    }
+  }, [
+    canonicalState,
+    sessionData?.session?.browserSessionId,
+    metadata?.browserSessionId,
+    liveUrl,
+    liveViewStatus,
+  ]);
 
   const handleStopSession = useCallback(async () => {
     if (!chatId || isStopping) {
@@ -486,6 +615,12 @@ export function BrowserPreview({
     }
     isRestartingRef.current = true;
     setIsRestarting(true);
+    setRestartError(null);
+    const oldSessionId = activeBrowserSessionIdRef.current;
+
+    console.log(
+      `[BrowserRecovery] Action=restart_browser, oldSessionId=${oldSessionId ?? "none"}, targetUrl=${targetUrl}`
+    );
 
     try {
       const res = await fetch("/api/qa/session", {
@@ -501,13 +636,20 @@ export function BrowserPreview({
       });
 
       if (!res.ok) {
-        throw new Error("Failed to restart browser session");
+        throw new Error(
+          `Failed to restart browser session: HTTP ${res.status}`
+        );
       }
 
       const data = await res.json();
       if (data?.session) {
         const newSession = data.session;
         activeBrowserSessionIdRef.current = newSession.browserSessionId;
+        console.log(
+          `[BrowserRecovery] Restart success: oldSessionId=${oldSessionId ?? "none"}, newSessionId=${newSession.browserSessionId}`
+        );
+
+        setLiveViewStatus("connecting");
 
         // Synchronously update SWR cache so neither preview nor chat shell flashes stale state
         await mutateSession(
@@ -539,8 +681,9 @@ export function BrowserPreview({
 
         setIframeKey((k) => k + 1);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("[BrowserPreview] Error restarting browser session:", err);
+      setRestartError(err?.message || "Failed to restart browser session");
     } finally {
       setIsRestarting(false);
       isRestartingRef.current = false;
@@ -658,7 +801,8 @@ export function BrowserPreview({
                   <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
                   Reconnecting…
                 </span>
-              ) : isRestarting ? (
+              ) : canonicalState === "BROWSER_SESSION_STARTING" ||
+                isRestarting ? (
                 <span className="flex items-center gap-1 font-medium text-blue-500">
                   <span className="size-1.5 animate-pulse rounded-full bg-blue-500" />
                   Starting session…
@@ -673,7 +817,12 @@ export function BrowserPreview({
                   <span className="size-1.5 animate-pulse rounded-full bg-blue-500" />
                   Resuming…
                 </span>
-              ) : isSessionEnded ? (
+              ) : canonicalState === "LIVE_VIEW_DISCONNECTED" ? (
+                <span className="flex items-center gap-1 font-medium text-amber-500">
+                  <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
+                  Stream disconnected
+                </span>
+              ) : canonicalState === "BROWSER_SESSION_ENDED" ? (
                 <span className="flex items-center gap-1 font-medium text-muted-foreground">
                   <span className="size-1.5 rounded-full bg-muted-foreground/60" />
                   Ended
@@ -693,7 +842,8 @@ export function BrowserPreview({
                   <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
                   Connecting
                 </span>
-              ) : status === "error" ? (
+              ) : status === "error" ||
+                canonicalState === "BROWSER_SESSION_START_FAILED" ? (
                 <span className="flex items-center gap-1 font-medium text-destructive">
                   <span className="size-1.5 rounded-full bg-destructive" />
                   Error
@@ -887,18 +1037,22 @@ export function BrowserPreview({
         <div
           className={cn(
             "relative flex flex-col overflow-hidden rounded-lg border border-border/40 bg-background shadow-xs",
-            liveUrl ? "max-h-full max-w-full h-full w-auto" : "flex-1 w-full"
+            liveUrl && canonicalState === "BROWSER_SESSION_READY"
+              ? "max-h-full max-w-full h-full w-auto"
+              : "flex-1 w-full"
           )}
           ref={containerRef}
           style={
-            liveUrl && activeAspectRatio
+            liveUrl &&
+            canonicalState === "BROWSER_SESSION_READY" &&
+            activeAspectRatio
               ? {
                   aspectRatio: `${activeAspectRatio}`,
                 }
               : undefined
           }
         >
-          {isSessionEnded ? (
+          {canonicalState === "BROWSER_SESSION_ENDED" ? (
             <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center animate-in fade-in-0 zoom-in-95 duration-200">
               <div className="flex size-10 items-center justify-center rounded-xl border border-border/50 bg-muted/40 text-muted-foreground shadow-xs">
                 <MonitorOff className="size-5 opacity-70" />
@@ -927,7 +1081,44 @@ export function BrowserPreview({
                 </span>
               </Button>
             </div>
-          ) : liveUrl ? (
+          ) : canonicalState === "LIVE_VIEW_DISCONNECTED" ? (
+            <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center animate-in fade-in-0 zoom-in-95 duration-200">
+              <div className="flex size-10 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10 text-amber-500 shadow-xs">
+                <WifiOff className="size-5" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <p className="text-sm font-medium text-foreground">
+                  Live Stream Interrupted
+                </p>
+                <p className="text-xs text-muted-foreground max-w-sm">
+                  The browser session is still running in the cloud. CDP
+                  connection to the live view was interrupted.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 mt-1">
+                <Button
+                  className="h-8 px-3 text-xs gap-1.5"
+                  onClick={handleReconnectLiveView}
+                  size="sm"
+                  variant="outline"
+                >
+                  <RotateCw className="size-3.5" />
+                  <span>Reconnect live view</span>
+                </Button>
+                {liveUrl ? (
+                  <Button
+                    className="h-8 px-3 text-xs gap-1.5"
+                    onClick={handleOpenExternal}
+                    size="sm"
+                    variant="ghost"
+                  >
+                    <ExternalLink className="size-3.5" />
+                    <span>Open in new tab</span>
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ) : canonicalState === "BROWSER_SESSION_READY" && liveUrl ? (
             <iframe
               allow="clipboard-read; clipboard-write"
               className="absolute inset-0 block h-full w-full border-0 bg-background animate-in fade-in-0 zoom-in-95 duration-200"
@@ -935,7 +1126,7 @@ export function BrowserPreview({
               src={liveUrl}
               title="Live Browser Session"
             />
-          ) : status === "connecting" || isSessionFetching || isRestarting ? (
+          ) : canonicalState === "BROWSER_SESSION_STARTING" ? (
             <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center animate-in fade-in-0 zoom-in-95 duration-200">
               <Shimmer
                 className="text-sm font-medium text-foreground whitespace-normal break-words"
@@ -949,7 +1140,7 @@ export function BrowserPreview({
                 Spawning cloud browser instance for {displayHost}...
               </p>
             </div>
-          ) : status === "error" ? (
+          ) : canonicalState === "BROWSER_SESSION_START_FAILED" ? (
             <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center">
               <div className="flex size-10 items-center justify-center rounded-xl border border-destructive/20 bg-destructive/10 text-destructive shadow-xs">
                 <AlertCircle className="size-5" />
@@ -959,19 +1150,30 @@ export function BrowserPreview({
                   Browser Connection Failed
                 </p>
                 <p className="text-xs text-muted-foreground max-w-sm">
-                  {metadata?.errorMessage ||
+                  {restartError ||
+                    metadata?.errorMessage ||
                     "Could not connect to the live browser instance."}
                 </p>
               </div>
-              <Button
-                className="mt-2 text-xs"
-                onClick={handleRetry}
-                size="sm"
-                variant="outline"
-              >
-                <RotateCw className="mr-1.5 size-3.5" />
-                Retry Connection
-              </Button>
+              <div className="flex items-center gap-2 mt-2">
+                <Button
+                  className="h-8 px-3 text-xs gap-1.5"
+                  onClick={handleRestartBrowser}
+                  size="sm"
+                >
+                  <RotateCcw className="size-3.5" />
+                  <span>Restart browser</span>
+                </Button>
+                <Button
+                  className="h-8 px-3 text-xs gap-1.5"
+                  onClick={handleRetry}
+                  size="sm"
+                  variant="outline"
+                >
+                  <RotateCw className="size-3.5" />
+                  <span>Retry Connection</span>
+                </Button>
+              </div>
             </div>
           ) : (
             <div className="flex flex-1 min-h-0 w-full flex-col items-center justify-center gap-3 p-6 text-center">

@@ -62,8 +62,17 @@ export async function isBrowserSessionUsable(
   try {
     const client = getBrowserUseClient();
     const liveSession = await client.sessions.get(browserSessionId);
-    return Boolean(liveSession && liveSession.status === "active");
-  } catch {
+    const isUsable = Boolean(
+      liveSession && liveSession.status === "active" && !liveSession.finishedAt
+    );
+    console.log(
+      `[BrowserSession] Checking usable: browserSessionId=${browserSessionId} -> ${isUsable ? "usable" : "not usable"}`
+    );
+    return isUsable;
+  } catch (err: any) {
+    console.log(
+      `[BrowserSession] Usability check failed for browserSessionId=${browserSessionId}: ${err?.message ?? "unknown error"}`
+    );
     return false;
   }
 }
@@ -130,7 +139,14 @@ export async function getOrCreateBrowserSession({
           }
         }
 
-        if (liveSession && liveSession.status === "active") {
+        if (
+          liveSession &&
+          liveSession.status === "active" &&
+          !liveSession.finishedAt
+        ) {
+          console.log(
+            `[BrowserSession] Reusing session: sessionId=${existing.id}, browserSessionId=${existing.browserSessionId}, liveUrl=${Boolean(liveSession.liveUrl ?? existing.liveUrl)}`
+          );
           return {
             browserScreenHeight:
               (liveSession as any).browserScreenHeight ?? browserScreenHeight,
@@ -144,10 +160,13 @@ export async function getOrCreateBrowserSession({
           };
         }
 
-        if (liveSession && liveSession.status !== "active") {
+        if (
+          liveSession &&
+          (liveSession.status !== "active" || liveSession.finishedAt)
+        ) {
           // Cloud session is no longer active (e.g. stopped, expired)
           console.log(
-            `[BrowserUse] Existing session ${existing.browserSessionId} is ${liveSession.status}. Marking completed in DB.`
+            `[BrowserUse] Existing session ${existing.browserSessionId} is ${liveSession.status} (finishedAt=${liveSession.finishedAt ?? "none"}). Marking completed in DB.`
           );
           await updateTestSessionStatus({
             force: true,
@@ -250,6 +269,10 @@ export async function getOrCreateBrowserSession({
     liveUrl: liveUrl ?? undefined,
     status: "active",
   });
+
+  console.log(
+    `[BrowserSession] Created session: sessionId=${created.id}, browserSessionId=${browserSessionId}, liveUrl=${Boolean(liveUrl)}`
+  );
 
   return {
     browserScreenHeight: finalHeight,
@@ -560,6 +583,10 @@ export async function restartBrowserSession({
   const existing = await getTestSessionByChatId({ chatId });
   const resolvedTarget =
     targetUrl || existing?.targetUrl || "https://google.com";
+
+  console.log(
+    `[BrowserRecovery] Action=restart, oldSessionId=${existing?.browserSessionId ?? "none"}, targetUrl=${resolvedTarget}`
+  );
 
   if (existing?.browserSessionId) {
     try {

@@ -16,7 +16,7 @@ const sessionCloudCheckCache = new Map<
   string,
   { timestamp: number; session: any }
 >();
-const CLOUD_CHECK_COOLDOWN_MS = 15_000;
+const CLOUD_CHECK_COOLDOWN_MS = 5000;
 
 export async function GET(request: Request) {
   const session = await auth();
@@ -27,6 +27,7 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const chatId = searchParams.get("chatId");
+  const force = searchParams.get("force") === "true";
 
   if (!chatId) {
     return Response.json(
@@ -60,9 +61,9 @@ export async function GET(request: Request) {
           Date.now() - cached.timestamp < CLOUD_CHECK_COOLDOWN_MS &&
           Boolean(liveUrl);
 
-        let cloudSession: any = isFresh ? cached.session : null;
+        let cloudSession: any = !force && isFresh ? cached.session : null;
 
-        if (!isFresh) {
+        if (!cloudSession) {
           const client = getBrowserUseClient();
           try {
             cloudSession = await client.sessions.get(
@@ -73,6 +74,9 @@ export async function GET(request: Request) {
                 session: cloudSession,
                 timestamp: Date.now(),
               });
+              console.log(
+                `[BrowserUse] Cloud session get: browserSessionId=${testSession.browserSessionId}, status=${cloudSession.status}, finishedAt=${cloudSession.finishedAt ?? "none"}`
+              );
             }
           } catch (fetchErr: any) {
             // Bounded retry on network glitch
@@ -97,10 +101,14 @@ export async function GET(request: Request) {
               fetchErr?.message?.includes("not found")
             ) {
               // Truly terminated on cloud
+              console.log(
+                `[BrowserUse] Cloud session ${testSession.browserSessionId} returned 404/not found. Marking completed.`
+              );
               sessionCloudCheckCache.delete(testSession.browserSessionId);
               currentStatus = "completed";
               isEnded = true;
               await updateTestSessionStatus({
+                force: true,
                 id: testSession.id,
                 status: "completed",
               }).catch(() => null);
@@ -108,10 +116,20 @@ export async function GET(request: Request) {
           }
         }
 
-        if (cloudSession && cloudSession.status !== "active") {
+        const isCloudTerminated =
+          cloudSession &&
+          (cloudSession.status !== "active" ||
+            Boolean(cloudSession.finishedAt));
+
+        if (isCloudTerminated) {
+          console.log(
+            `[BrowserUse] Cloud session ${testSession.browserSessionId} terminated (status=${cloudSession.status}, finishedAt=${cloudSession.finishedAt ?? "none"}). Marking completed.`
+          );
+          sessionCloudCheckCache.delete(testSession.browserSessionId);
           currentStatus = "completed";
           isEnded = true;
           await updateTestSessionStatus({
+            force: true,
             id: testSession.id,
             status: "completed",
           });
@@ -139,6 +157,10 @@ export async function GET(request: Request) {
         );
       }
     }
+
+    console.log(
+      `[BrowserSession] Status check: id=${testSession.id}, browserSessionId=${testSession.browserSessionId}, status=${currentStatus}, isEnded=${isEnded}, liveUrl=${Boolean(liveUrl)}`
+    );
 
     // Retrieve active or last execution from tracker
     let execution = ExecutionTracker.getActiveRun(chatId);

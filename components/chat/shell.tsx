@@ -69,6 +69,7 @@ export function ChatShell() {
       liveUrl: string | null;
       targetUrl: string;
       status: string;
+      isEnded?: boolean;
     } | null;
     execution: any;
   }>(chatId ? `/api/qa/session?chatId=${chatId}` : null, fetcher, {
@@ -81,7 +82,7 @@ export function ChatShell() {
     const s = sessionData?.session;
     const exec = sessionData?.execution;
 
-    if (s?.liveUrl && hasRestoredSessionRef.current !== s.id) {
+    if (s?.liveUrl && !s.isEnded && hasRestoredSessionRef.current !== s.id) {
       hasRestoredSessionRef.current = s.id;
       setArtifact((prev) => {
         if (prev.isVisible) {
@@ -133,11 +134,17 @@ export function ChatShell() {
           return safePrev;
         }
 
+        const isEnded = Boolean(s.isEnded);
+
         return {
           ...safePrev,
           browserSessionId: s.browserSessionId || safePrev.browserSessionId,
-          liveUrl: s.liveUrl ?? safePrev.liveUrl,
-          status: s.status === "active" ? "live" : safePrev.status || "idle",
+          liveUrl: isEnded ? undefined : (s.liveUrl ?? safePrev.liveUrl),
+          status: isEnded
+            ? "stopped"
+            : s.status === "active"
+              ? "live"
+              : safePrev.status || "idle",
           targetUrl: s.targetUrl || safePrev.targetUrl,
           ...(exec
             ? {
