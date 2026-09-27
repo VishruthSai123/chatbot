@@ -9,7 +9,7 @@ import type { runBrowserStep } from "./ai/tools/run-browser-step";
 import type { startTestSession } from "./ai/tools/start-test-session";
 import type { updateDocument } from "./ai/tools/update-document";
 import type { Suggestion } from "./db/schema";
-import type { QAExecutionStreamData } from "./qa/execution-types";
+import type { DownloadItem, QAExecutionStreamData } from "./qa/execution-types";
 
 export const messageMetadataSchema = z.object({
   createdAt: z.string(),
@@ -94,6 +94,7 @@ export type CustomUIDataTypes = {
     severity?: string;
     findingId?: string | null;
   };
+  "qa-download": DownloadItem;
 };
 
 export type ChatMessage = UIMessage<

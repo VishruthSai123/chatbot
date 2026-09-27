@@ -169,6 +169,7 @@ export function ChatShell() {
                     : safePrev.cancelledAt,
                 completedAt: exec.completedAt || safePrev.completedAt,
                 currentAction: exec.currentAction || safePrev.currentAction,
+                downloads: exec.downloads || safePrev.downloads,
                 executionState: exec.executionState || safePrev.executionState,
                 findingId: exec.findingId || safePrev.findingId,
                 recentSteps: exec.steps || safePrev.recentSteps,

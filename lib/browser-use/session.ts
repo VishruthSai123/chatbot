@@ -3,6 +3,8 @@ import {
   getTestSessionByChatId,
   updateTestSessionStatus,
 } from "@/lib/db/queries";
+import { syncBrowserDownloads } from "@/lib/qa/download-manager";
+import type { DownloadItem } from "@/lib/qa/execution-types";
 import { getBrowserUseClient, type TaskStepView } from "./client";
 
 function normalizeUrl(url: string): string {
@@ -34,11 +36,14 @@ export interface ActiveBrowserSession {
 }
 
 export interface RunBrowserTaskOptions {
+  chatId?: string;
   instruction: string;
   isCancelled?: () => boolean;
+  onDownload?: (download: DownloadItem) => void | Promise<void>;
   onHeartbeat?: (elapsedSeconds: number) => void | Promise<void>;
   onStep?: (step: TaskStepView) => void | Promise<void>;
   onTaskId?: (taskId: string) => void;
+  runId?: string;
   sessionId: string;
 }
 
@@ -296,6 +301,9 @@ export async function runBrowserTask({
   onTaskId,
   onHeartbeat,
   isCancelled,
+  chatId,
+  runId,
+  onDownload,
 }: RunBrowserTaskOptions): Promise<RunBrowserTaskResult> {
   const client = getBrowserUseClient();
 
@@ -364,6 +372,28 @@ export async function runBrowserTask({
   const timeoutMs = 300_000;
   const deadline = startTime + timeoutMs;
 
+  // Download sync helper: runs in background without blocking the poll loop
+  let lastDownloadSync = 0;
+  const DOWNLOAD_SYNC_INTERVAL = 10_000; // Check for downloads every 10s
+  const maybeCheckDownloads = () => {
+    if (!chatId || !runId) {
+      return;
+    }
+    const now = Date.now();
+    if (now - lastDownloadSync < DOWNLOAD_SYNC_INTERVAL) {
+      return;
+    }
+    lastDownloadSync = now;
+    syncBrowserDownloads({
+      browserSessionId: sessionId,
+      chatId,
+      onDownload,
+      runId,
+    }).catch((err) => {
+      console.warn("[BrowserUse] Background download sync error:", err);
+    });
+  };
+
   try {
     while (Date.now() < deadline) {
       // Periodic check for cancellation requested during loop
@@ -430,6 +460,18 @@ export async function runBrowserTask({
             /* non-fatal */
           }
         }
+        if (chatId && runId) {
+          try {
+            await syncBrowserDownloads({
+              browserSessionId: sessionId,
+              chatId,
+              onDownload,
+              runId,
+            });
+          } catch {
+            /* non-fatal */
+          }
+        }
         return {
           isStopped: true,
           isSuccess: false,
@@ -441,6 +483,20 @@ export async function runBrowserTask({
 
       // Check if finished
       if (task.status === "finished") {
+        // Sync downloads one final time when task completes
+        if (chatId && runId) {
+          try {
+            await syncBrowserDownloads({
+              browserSessionId: sessionId,
+              chatId,
+              onDownload,
+              runId,
+            });
+          } catch (dlErr) {
+            console.warn("[BrowserUse] Final download sync error:", dlErr);
+          }
+        }
+
         return {
           isStopped: false,
           isSuccess: task.isSuccess ?? null,
@@ -452,6 +508,9 @@ export async function runBrowserTask({
           taskId,
         };
       }
+
+      // Periodic background download check during long tasks
+      maybeCheckDownloads();
 
       // Emit heartbeat to keep SSE connection alive and UI progress updated
       const elapsedSeconds = Math.max(

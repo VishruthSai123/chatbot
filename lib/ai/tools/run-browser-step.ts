@@ -138,8 +138,17 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
 
         const executeTaskWithSession = async (sessId: string) => {
           return await runBrowserTask({
+            chatId,
             instruction,
             isCancelled: () => ExecutionTracker.isCancelRequested(chatId),
+            onDownload: (download) => {
+              // Stream download events to the frontend
+              dataStream.write({
+                data: download,
+                transient: true,
+                type: "data-qa-download",
+              });
+            },
             onHeartbeat: (elapsedSeconds) => {
               // Keep SSE connection alive on long steps without spamming state or overwriting action text
               if (elapsedSeconds > 0 && elapsedSeconds % 15 === 0) {
@@ -220,6 +229,7 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
                 );
               }
             },
+            runId: activeRun?.runId,
             sessionId: sessId,
           });
         };

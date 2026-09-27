@@ -194,6 +194,30 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
           };
         });
       }
+
+      if (streamPart.type === "data-qa-download") {
+        const download = streamPart.data;
+        setMetadata((prev) => {
+          const safePrev = prev ?? {};
+          const existing = safePrev.downloads || [];
+          const idx = existing.findIndex(
+            (d: any) => d.downloadId === download.downloadId
+          );
+
+          let updatedDownloads: any[];
+          if (idx >= 0) {
+            updatedDownloads = [...existing];
+            updatedDownloads[idx] = { ...updatedDownloads[idx], ...download };
+          } else {
+            updatedDownloads = [...existing, download];
+          }
+
+          return {
+            ...safePrev,
+            downloads: updatedDownloads,
+          };
+        });
+      }
     },
     toolbar: [],
   }

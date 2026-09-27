@@ -104,6 +104,22 @@ export interface ExecutionStep {
   url?: string;
 }
 
+export type DownloadStatus = "started" | "downloading" | "ready" | "failed";
+
+export interface DownloadItem {
+  createdAt: string;
+  downloadId: string;
+  error?: string;
+  fileName: string;
+  fileSize?: number;
+  localPath?: string;
+  mimeType: string;
+  remoteUrl?: string;
+  runId: string;
+  status: DownloadStatus;
+  url?: string;
+}
+
 export interface ExecutionRecord {
   activeTaskId?: string | null;
   browserSessionId?: string; // Browser Use Cloud Session ID
@@ -112,6 +128,7 @@ export interface ExecutionRecord {
   completedAt?: string;
   currentAction?: string;
   currentStep?: number;
+  downloads?: DownloadItem[];
   error?: string;
   executionState: CanonicalExecutionState;
   findingId?: string | null;
@@ -136,6 +153,7 @@ export interface QAExecutionStreamData {
   completedAt?: string;
   currentAction?: string;
   currentStep?: number;
+  downloads?: DownloadItem[];
   error?: string;
   executionState: CanonicalExecutionState;
   findingId?: string | null;

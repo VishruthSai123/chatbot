@@ -2,6 +2,7 @@ import { getBrowserUseClient } from "@/lib/browser-use/client";
 import { generateUUID } from "@/lib/utils";
 import {
   canTransitionState,
+  type DownloadItem,
   type ExecutionRecord,
   type ExecutionStep,
   isIrreversibleExecutionState,
@@ -135,6 +136,7 @@ function startRun({
     browserSessionId,
     chatId,
     currentAction: "Initializing browser session...",
+    downloads: existing?.downloads ? [...existing.downloads] : [],
     executionState: "STARTING",
     isCancelRequested: false,
     lastActivityAt: now,
@@ -740,9 +742,82 @@ function getRunById(runId: string): ExecutionRecord | null {
 }
 
 /**
+ * Adds or updates a download item on the active run.
+ */
+function addDownload(
+  chatId: string,
+  download: DownloadItem
+): ExecutionRecord | null {
+  const run =
+    registry.activeRunsByChat.get(chatId) ||
+    registry.runsById.get(download.runId);
+  if (!run) {
+    return null;
+  }
+  if (!run.downloads) {
+    run.downloads = [];
+  }
+  const existingIdx = run.downloads.findIndex(
+    (d) =>
+      d.downloadId === download.downloadId || d.fileName === download.fileName
+  );
+  if (existingIdx >= 0) {
+    run.downloads[existingIdx] = {
+      ...run.downloads[existingIdx],
+      ...download,
+    };
+  } else {
+    run.downloads.push(download);
+  }
+  run.sequence += 1;
+  run.lastActivityAt = new Date().toISOString();
+  persistExecutionSnapshot(run).catch(() => {
+    /* non-fatal snapshot update */
+  });
+  return run;
+}
+
+/**
+ * Updates a download item on the active run.
+ */
+function updateDownload(
+  chatId: string,
+  downloadId: string,
+  updates: Partial<DownloadItem>
+): ExecutionRecord | null {
+  const run =
+    registry.activeRunsByChat.get(chatId) ||
+    (updates.runId ? registry.runsById.get(updates.runId) : null);
+  if (!run?.downloads) {
+    return null;
+  }
+  const idx = run.downloads.findIndex((d) => d.downloadId === downloadId);
+  if (idx >= 0) {
+    run.downloads[idx] = {
+      ...run.downloads[idx],
+      ...updates,
+    };
+    run.sequence += 1;
+    run.lastActivityAt = new Date().toISOString();
+    persistExecutionSnapshot(run).catch(() => {
+      /* non-fatal snapshot update */
+    });
+  }
+  return run;
+}
+
+function getDownloads(runId: string): DownloadItem[] {
+  const run = registry.runsById.get(runId);
+  return run?.downloads || [];
+}
+
+/**
  * Restores an execution record into memory (e.g. on server reload or reconnection).
  */
 function restoreRun(record: ExecutionRecord): ExecutionRecord {
+  if (!record.downloads) {
+    record.downloads = [];
+  }
   registry.activeRunsByChat.set(record.chatId, record);
   registry.runsById.set(record.runId, record);
   return record;
@@ -750,10 +825,12 @@ function restoreRun(record: ExecutionRecord): ExecutionRecord {
 
 export const ExecutionTracker = {
   abortChat,
+  addDownload,
   cancelRun,
   completeRun,
   failRun,
   getActiveRun,
+  getDownloads,
   getRunById,
   isCancelRequested,
   recordFinalizing,
@@ -764,5 +841,6 @@ export const ExecutionTracker = {
   setActiveTaskId,
   startRun,
   unregisterAbortController,
+  updateDownload,
   updateStep,
 };

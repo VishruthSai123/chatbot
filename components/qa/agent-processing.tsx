@@ -23,6 +23,7 @@ import { useArtifact } from "@/hooks/use-artifact";
 import { isTerminalExecutionState } from "@/lib/qa/execution-types";
 import { cn } from "@/lib/utils";
 import { Shimmer } from "../ai-elements/shimmer";
+import { AgentDownloads } from "./agent-downloads";
 
 export interface AgentProcessingProps {
   chatId?: string;
@@ -876,6 +877,11 @@ export const AgentProcessing = memo(
               </div>
             ))}
           </CollapsibleContent>
+        )}
+
+        {/* Downloads section */}
+        {metadata?.downloads && metadata.downloads.length > 0 && (
+          <AgentDownloads downloads={metadata.downloads} />
         )}
       </Collapsible>
     );

@@ -27,6 +27,7 @@ import { useActiveChat } from "@/hooks/use-active-chat";
 import { useArtifact } from "@/hooks/use-artifact";
 import {
   type CanonicalExecutionState,
+  type DownloadItem,
   isTerminalExecutionState,
 } from "@/lib/qa/execution-types";
 import { cn, fetcher } from "@/lib/utils";
@@ -72,6 +73,7 @@ export type BrowserArtifactMetadata = {
   }>;
   errorMessage?: string;
   isFullscreen?: boolean;
+  downloads?: DownloadItem[];
 };
 
 interface BrowserPreviewProps {
@@ -377,6 +379,7 @@ export function BrowserPreview({
           ...(exec
             ? {
                 currentAction: exec.currentAction || safePrev.currentAction,
+                downloads: exec.downloads || safePrev.downloads,
                 errorMessage: exec.error || safePrev.errorMessage,
                 executionState: exec.executionState || safePrev.executionState,
                 findingId: exec.findingId || f?.findingId || safePrev.findingId,
