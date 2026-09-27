@@ -1,6 +1,17 @@
 "use client";
 
-import { ChevronDownIcon } from "lucide-react";
+import {
+  CheckCircle2,
+  ChevronDownIcon,
+  CircleAlert,
+  CircleStop,
+  Clock,
+  Globe,
+  Keyboard,
+  MousePointer2,
+  Search,
+  Sparkles,
+} from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Collapsible,
@@ -19,11 +30,150 @@ export interface AgentProcessingProps {
   parts: any[];
 }
 
+export type AgentActionType =
+  | "navigate"
+  | "click"
+  | "input"
+  | "search"
+  | "verify"
+  | "wait"
+  | "stop"
+  | "default";
+
 interface ActionItem {
+  actionType: AgentActionType;
+  detail?: string;
   error?: string;
   id: string;
   label: string;
   status: "completed" | "failed" | "pending" | "running";
+}
+
+function getActionType(label: string, detail?: string): AgentActionType {
+  const text = `${label} ${detail || ""}`.toLowerCase();
+  if (
+    text.includes("navigate") ||
+    text.includes("connect") ||
+    text.includes("open") ||
+    text.includes("goto") ||
+    text.includes("http://") ||
+    text.includes("https://")
+  ) {
+    return "navigate";
+  }
+  if (
+    text.includes("search") ||
+    text.includes("find") ||
+    text.includes("query") ||
+    text.includes("looking for")
+  ) {
+    return "search";
+  }
+  if (
+    text.includes("click") ||
+    text.includes("press") ||
+    text.includes("select") ||
+    text.includes("tap") ||
+    text.includes("choose") ||
+    text.includes("submit") ||
+    text.includes("button")
+  ) {
+    return "click";
+  }
+  if (
+    text.includes("type") ||
+    text.includes("input") ||
+    text.includes("enter") ||
+    text.includes("fill") ||
+    text.includes("write") ||
+    text.includes("keystroke")
+  ) {
+    return "input";
+  }
+  if (
+    text.includes("verify") ||
+    text.includes("check") ||
+    text.includes("assert") ||
+    text.includes("eval") ||
+    text.includes("finding") ||
+    text.includes("outcome") ||
+    text.includes("confirm")
+  ) {
+    return "verify";
+  }
+  if (
+    text.includes("wait") ||
+    text.includes("sleep") ||
+    text.includes("delay") ||
+    text.includes("pause")
+  ) {
+    return "wait";
+  }
+  if (text.includes("stop") || text.includes("cancel")) {
+    return "stop";
+  }
+  return "default";
+}
+
+function getActionTypeIcon(actionType: AgentActionType) {
+  switch (actionType) {
+    case "navigate":
+      return Globe;
+    case "click":
+      return MousePointer2;
+    case "input":
+      return Keyboard;
+    case "search":
+      return Search;
+    case "verify":
+      return CheckCircle2;
+    case "wait":
+      return Clock;
+    case "stop":
+      return CircleStop;
+    default:
+      return Sparkles;
+  }
+}
+
+function renderStepIcon(action: ActionItem) {
+  if (action.status === "failed") {
+    return <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />;
+  }
+
+  const IconComp = getActionTypeIcon(action.actionType);
+
+  if (action.status === "running") {
+    return (
+      <IconComp className="mt-0.5 size-4 shrink-0 animate-pulse text-foreground/90" />
+    );
+  }
+
+  return (
+    <IconComp
+      className={cn(
+        "mt-0.5 size-4 shrink-0 transition-colors",
+        action.status === "completed"
+          ? "text-muted-foreground/75 group-hover/row:text-foreground"
+          : "text-muted-foreground/40"
+      )}
+    />
+  );
+}
+
+function formatTargetDomain(urlStr?: string): { domain: string; full: string } {
+  if (!urlStr) {
+    return { domain: "browser session", full: "" };
+  }
+  try {
+    const parsed = new URL(
+      urlStr.startsWith("http") ? urlStr : `https://${urlStr}`
+    );
+    const domain = parsed.hostname.replace(/^www\./, "");
+    return { domain, full: parsed.href };
+  } catch {
+    return { domain: urlStr, full: urlStr };
+  }
 }
 
 export const AgentProcessing = memo(
@@ -149,28 +299,36 @@ export const AgentProcessing = memo(
       };
     }, [isAnyRunning]);
 
-    // Build Action Items (integrating fine-grained Browser Use sub-steps)
+    // Build Lightweight Action Items
     const actions: ActionItem[] = useMemo(() => {
       const items: ActionItem[] = [];
 
       // 1. Session Initialization
       if (startTestSessionPart) {
-        const targetUrl =
+        const rawTargetUrl =
           startTestSessionPart.input?.targetUrl ||
           startTestSessionPart.output?.targetUrl ||
           metadata?.targetUrl;
+        const targetInfo = formatTargetDomain(rawTargetUrl);
         const isPartError =
           startTestSessionPart.state === "output-error" ||
           Boolean(startTestSessionPart.output?.error);
 
+        const primaryLabel = targetInfo.full
+          ? `Navigate to ${targetInfo.domain}`
+          : "Connect to browser session";
+        const secondaryDetail = targetInfo.full
+          ? `Opened ${targetInfo.domain}`
+          : "Browser session initialized";
+
         items.push({
+          actionType: "navigate",
+          detail: isPartError ? undefined : secondaryDetail,
           error: isPartError
             ? String(startTestSessionPart.output?.error || "Connection failed")
             : undefined,
           id: startTestSessionPart.toolCallId || "start-session",
-          label: targetUrl
-            ? `Connect to ${targetUrl}`
-            : "Connect to browser session",
+          label: primaryLabel,
           status:
             startTestSessionPart.state === "output-available" && !isPartError
               ? "completed"
@@ -182,31 +340,45 @@ export const AgentProcessing = memo(
 
       // 2. High-level Browser Steps
       for (const [idx, stepPart] of runBrowserStepParts.entries()) {
-        const instruction =
+        const rawInstruction =
           stepPart.input?.instruction || "Execute browser task";
         const stepCount = stepPart.output?.stepCount;
         const isPartError =
           stepPart.state === "output-error" || Boolean(stepPart.output?.error);
 
+        const status =
+          stepPart.state === "output-available" && !isPartError
+            ? "completed"
+            : isPartError
+              ? "failed"
+              : isThisMessageStopped ||
+                  execState === "CANCELLING" ||
+                  !isAnyRunning
+                ? "completed"
+                : "running";
+
+        let detail: string | undefined;
+        if (isPartError) {
+          detail = undefined;
+        } else if (stepPart.output?.lastConfirmedAction) {
+          detail = String(stepPart.output.lastConfirmedAction);
+        } else if (stepCount && stepCount > 1) {
+          detail = `Completed ${stepCount} actions`;
+        } else if (status === "completed") {
+          detail = "Action completed";
+        } else if (status === "running") {
+          detail = "Executing action in browser...";
+        }
+
         items.push({
+          actionType: getActionType(rawInstruction, detail),
+          detail,
           error: isPartError
             ? String(stepPart.output?.error || "Action failed")
             : undefined,
           id: stepPart.toolCallId || `step-${idx}`,
-          label:
-            stepCount && stepCount > 1
-              ? `${instruction} (${stepCount} steps)`
-              : instruction,
-          status:
-            stepPart.state === "output-available" && !isPartError
-              ? "completed"
-              : isPartError
-                ? "failed"
-                : isThisMessageStopped ||
-                    execState === "CANCELLING" ||
-                    !isAnyRunning
-                  ? "completed"
-                  : "running",
+          label: rawInstruction,
+          status,
         });
       }
 
@@ -223,20 +395,41 @@ export const AgentProcessing = memo(
           evaluateTestResultPart?.state === "output-error" ||
           Boolean(evaluateTestResultPart?.output?.error);
 
+        const status =
+          (evaluateTestResultPart?.state === "output-available" ||
+            execState === "COMPLETED") &&
+          !isPartError
+            ? "completed"
+            : isPartError
+              ? "failed"
+              : "running";
+
+        const findingTitle =
+          evaluateTestResultPart?.output?.title &&
+          evaluateTestResultPart.output?.title !== "Test Stopped"
+            ? evaluateTestResultPart.output.title
+            : metadata?.finding?.title &&
+                metadata.finding.title !== "Test Stopped"
+              ? metadata.finding.title
+              : undefined;
+
+        const detail = isPartError
+          ? undefined
+          : findingTitle
+            ? String(findingTitle)
+            : status === "completed"
+              ? "Verification successful"
+              : "Asserting outcome & recording findings";
+
         items.push({
+          actionType: "verify",
+          detail,
           error: isPartError
             ? String(evaluateTestResultPart?.output?.error)
             : undefined,
           id: evaluateTestResultPart?.toolCallId || "eval-result",
-          label: "Verify test outcome & record findings",
-          status:
-            (evaluateTestResultPart?.state === "output-available" ||
-              execState === "COMPLETED") &&
-            !isPartError
-              ? "completed"
-              : isPartError
-                ? "failed"
-                : "running",
+          label: "Verify test outcome",
+          status,
         });
       }
 
@@ -246,6 +439,7 @@ export const AgentProcessing = memo(
       runBrowserStepParts,
       evaluateTestResultPart,
       metadata?.targetUrl,
+      metadata?.finding?.title,
       execState,
       isThisMessageStopped,
       isAnyRunning,
@@ -347,7 +541,7 @@ export const AgentProcessing = memo(
         return "Test execution completed.";
       }
 
-      // 6. Streaming continuation fallback (never premature 'Test completed')
+      // 6. Streaming continuation fallback
       if (isLoading) {
         return "Working...";
       }
@@ -378,18 +572,18 @@ export const AgentProcessing = memo(
       [actions]
     );
 
-    // Duration formatting
+    // Duration formatting for subtle AI-assistant header
     const durationDisplay = useMemo(() => {
       if (execState === "RESUMING") {
-        return "✦ Resuming...";
+        return "Resuming...";
       }
       if (execState === "CANCELLING") {
-        return "✦ Cancelling...";
+        return "Cancelling...";
       }
       if (isAnyRunning) {
         return elapsedSeconds > 0
-          ? `✦ Worked for ${elapsedSeconds}s`
-          : "✦ Working…";
+          ? `Working for ${elapsedSeconds}s`
+          : "Working…";
       }
       if (persistedDuration !== null) {
         return `Worked for ${persistedDuration}s`;
@@ -397,7 +591,6 @@ export const AgentProcessing = memo(
       if (elapsedSeconds > 0) {
         return `Worked for ${elapsedSeconds}s`;
       }
-      // Historical fallback based on step count
       const totalSteps = validActions.length;
       return totalSteps > 0
         ? `Worked for ${Math.max(2, totalSteps * 3)}s`
@@ -419,20 +612,23 @@ export const AgentProcessing = memo(
         onOpenChange={setIsOpen}
         open={isOpen && validActions.length > 0}
       >
-        {/* Header with Worked for Xs and Chevron if items exist */}
+        {/* Subtle, premium header: ✦ Working for 13s ˅ */}
         <CollapsibleTrigger
           className={cn(
-            "group flex items-center gap-1.5 text-muted-foreground/80 text-xs transition-colors",
+            "group inline-flex items-center gap-1.5 text-xs text-muted-foreground/75 transition-colors select-none",
             validActions.length > 0
               ? "hover:text-foreground cursor-pointer"
               : "cursor-default pointer-events-none"
           )}
         >
+          <span className="text-[10px] text-muted-foreground/50 transition-colors group-hover:text-foreground/70">
+            ✦
+          </span>
           <span className="font-normal">{durationDisplay}</span>
           {validActions.length > 0 && (
             <ChevronDownIcon
               className={cn(
-                "size-3.5 text-muted-foreground/60 transition-transform duration-200 group-hover:text-foreground",
+                "size-3 text-muted-foreground/50 transition-transform duration-200 group-hover:text-foreground",
                 isOpen ? "rotate-180" : "rotate-0"
               )}
             />
@@ -440,71 +636,72 @@ export const AgentProcessing = memo(
         </CollapsibleTrigger>
 
         {/* Live / completed description */}
-        <div className="mt-1 text-[13px] leading-relaxed">
-          {isAnyRunning ? (
-            <Shimmer
-              className="font-medium text-foreground whitespace-normal break-words"
-              duration={1.5}
-            >
-              {activeDescription}
-            </Shimmer>
-          ) : (
-            <span
-              className={cn(
-                "whitespace-normal break-words",
-                isError
-                  ? "text-destructive font-medium"
-                  : "text-muted-foreground/90"
-              )}
-            >
-              {activeDescription}
-            </span>
-          )}
-        </div>
+        {activeDescription && (
+          <div className="mt-1 text-[13px] leading-relaxed">
+            {isAnyRunning ? (
+              <Shimmer
+                className="font-medium text-foreground whitespace-normal break-words"
+                duration={1.8}
+              >
+                {activeDescription}
+              </Shimmer>
+            ) : (
+              <span
+                className={cn(
+                  "whitespace-normal break-words",
+                  isError
+                    ? "font-medium text-destructive"
+                    : "text-muted-foreground/85"
+                )}
+              >
+                {activeDescription}
+              </span>
+            )}
+          </div>
+        )}
 
-        {/* Expandable Action Steps only if real actions exist */}
+        {/* Lightweight Execution Steps (No heavy boxes, no arrows, clean semantic icons) */}
         {validActions.length > 0 && (
-          <CollapsibleContent className="mt-2.5 space-y-1.5 border-border/20 border-l pl-2 text-xs">
+          <CollapsibleContent className="mt-2 space-y-1 pl-0.5">
             {validActions.map((action) => (
-              <div className="flex items-center gap-2 py-0.5" key={action.id}>
-                {action.status === "completed" && (
-                  <span className="select-none text-muted-foreground/60">
-                    →
-                  </span>
-                )}
-                {action.status === "running" && (
-                  <span className="inline-block size-1.5 animate-pulse rounded-full bg-primary" />
-                )}
-                {action.status === "failed" && (
-                  <span className="select-none text-destructive">✕</span>
-                )}
-                {action.status === "pending" && (
-                  <span className="select-none text-muted-foreground/40">
-                    ◇
-                  </span>
-                )}
-
-                {action.status === "running" ? (
-                  <Shimmer className="text-xs" duration={1.2}>
-                    {action.label}
-                  </Shimmer>
-                ) : (
-                  <span
-                    className={cn(
-                      "text-xs leading-normal",
-                      action.status === "failed"
-                        ? "text-destructive"
-                        : "text-muted-foreground/80"
+              <div
+                className="group/row flex items-start gap-2.5 py-1 text-left transition-colors"
+                key={action.id}
+              >
+                {renderStepIcon(action)}
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <div className="flex items-center gap-1.5">
+                    {action.status === "running" ? (
+                      <Shimmer
+                        className="text-[13px] font-medium leading-snug"
+                        duration={1.2}
+                      >
+                        {action.label}
+                      </Shimmer>
+                    ) : (
+                      <span
+                        className={cn(
+                          "truncate text-[13px] font-medium leading-snug",
+                          action.status === "failed"
+                            ? "text-destructive"
+                            : "text-foreground/90 group-hover/row:text-foreground"
+                        )}
+                      >
+                        {action.label}
+                      </span>
                     )}
-                  >
-                    {action.label}
                     {action.error ? (
-                      <span className="ml-1.5 text-destructive/90 text-xs">
+                      <span className="shrink-0 truncate text-[11px] text-destructive">
                         ({action.error})
                       </span>
                     ) : null}
-                  </span>
-                )}
+                  </div>
+                  {action.detail ? (
+                    <span className="mt-0.5 truncate text-[11px] leading-normal text-muted-foreground/75">
+                      {action.detail}
+                    </span>
+                  ) : null}
+                </div>
               </div>
             ))}
           </CollapsibleContent>

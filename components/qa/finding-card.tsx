@@ -1,17 +1,16 @@
 "use client";
 
 import {
-  AlertCircle,
   Ban,
   Check,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  CircleAlert,
+  CircleX,
   Copy,
   Download,
   FileText,
-  HelpCircle,
-  XCircle,
 } from "lucide-react";
 import { type ReactNode, useCallback, useState } from "react";
 import { toast } from "sonner";
@@ -41,37 +40,47 @@ export interface FindingData {
   title: string;
 }
 
-const statusConfig: Record<
-  FindingStatus,
-  { bg: string; border: string; icon: ReactNode; label: string; text: string }
-> = {
+interface StatusStyleConfig {
+  badgeBg: string;
+  badgeText: string;
+  border: string;
+  cardBg: string;
+  icon: ReactNode;
+  label: string;
+}
+
+const statusConfig: Record<FindingStatus, StatusStyleConfig> = {
   blocked: {
-    bg: "bg-zinc-500/10 dark:bg-zinc-400/10",
-    border: "border-zinc-300 dark:border-zinc-600",
-    icon: <Ban className="size-4" />,
+    badgeBg: "bg-zinc-500/15 dark:bg-zinc-400/15",
+    badgeText: "text-zinc-600 dark:text-zinc-400",
+    border: "border-zinc-300/80 dark:border-zinc-700/60",
+    cardBg: "bg-zinc-500/[0.03] dark:bg-zinc-400/[0.04]",
+    icon: <Ban className="size-3.5" />,
     label: "BLOCKED",
-    text: "text-zinc-600 dark:text-zinc-400",
   },
   fail: {
-    bg: "bg-red-500/10 dark:bg-red-400/10",
-    border: "border-red-300 dark:border-red-600",
-    icon: <XCircle className="size-4" />,
+    badgeBg: "bg-red-500/15 dark:bg-red-400/15",
+    badgeText: "text-red-600 dark:text-red-400",
+    border: "border-red-300/80 dark:border-red-700/60",
+    cardBg: "bg-red-500/[0.03] dark:bg-red-400/[0.04]",
+    icon: <CircleX className="size-3.5" />,
     label: "FAIL",
-    text: "text-red-600 dark:text-red-400",
   },
   pass: {
-    bg: "bg-emerald-500/10 dark:bg-emerald-400/10",
-    border: "border-emerald-300 dark:border-emerald-600",
-    icon: <CheckCircle2 className="size-4" />,
+    badgeBg: "bg-emerald-500/15 dark:bg-emerald-400/15",
+    badgeText: "text-emerald-600 dark:text-emerald-400",
+    border: "border-emerald-300/80 dark:border-emerald-700/60",
+    cardBg: "bg-emerald-500/[0.03] dark:bg-emerald-400/[0.04]",
+    icon: <CheckCircle2 className="size-3.5" />,
     label: "PASS",
-    text: "text-emerald-600 dark:text-emerald-400",
   },
   uncertain: {
-    bg: "bg-amber-500/10 dark:bg-amber-400/10",
-    border: "border-amber-300 dark:border-amber-600",
-    icon: <HelpCircle className="size-4" />,
+    badgeBg: "bg-amber-500/15 dark:bg-amber-400/15",
+    badgeText: "text-amber-600 dark:text-amber-400",
+    border: "border-amber-300/80 dark:border-amber-700/60",
+    cardBg: "bg-amber-500/[0.03] dark:bg-amber-400/[0.04]",
+    icon: <CircleAlert className="size-3.5" />,
     label: "UNCERTAIN",
-    text: "text-amber-600 dark:text-amber-400",
   },
 };
 
@@ -179,40 +188,48 @@ export function FindingCard({ finding }: { finding: FindingData }) {
   return (
     <div
       className={cn(
-        "w-full rounded-xl border shadow-sm transition-all duration-200 overflow-hidden",
+        "w-full max-w-[min(100%,560px)] rounded-lg border text-left transition-all duration-150 overflow-hidden",
         config.border,
-        config.bg
+        config.cardBg
       )}
     >
-      {/* Collapsed Header */}
+      {/* Compact Header: [Icon Badge] Title / Summary ... [Actions] */}
       <button
-        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+        className="flex w-full items-center gap-2.5 px-3 py-2 text-left cursor-pointer transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]"
         onClick={handleToggle}
         type="button"
       >
+        {/* Semantic Badge */}
         <div
           className={cn(
-            "flex items-center gap-2 font-semibold text-sm",
-            config.text
+            "inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold tracking-wide select-none",
+            config.badgeBg,
+            config.badgeText
           )}
         >
           {config.icon}
           <span>{config.label}</span>
         </div>
-        <div className="flex flex-1 flex-col gap-0.5 overflow-hidden">
-          <span className="truncate text-sm font-medium text-foreground">
+
+        {/* Title & Short Description */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[13px] font-medium text-foreground">
             {finding.title}
           </span>
-          <span className="truncate text-xs text-muted-foreground">
-            {finding.summary}
-          </span>
+          {finding.summary ? (
+            <span className="truncate text-[11px] text-muted-foreground/80">
+              {finding.summary}
+            </span>
+          ) : null}
         </div>
-        <div className="flex items-center gap-1.5 shrink-0 text-muted-foreground">
-          {/* Quick Copy Action */}
+
+        {/* Action Controls */}
+        <div className="flex items-center gap-1 shrink-0 text-muted-foreground/70">
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                className="p-1 rounded-md hover:bg-background/80 hover:text-foreground transition-colors cursor-pointer"
+                aria-label="Copy markdown report"
+                className="p-1 rounded hover:bg-background/80 hover:text-foreground transition-colors cursor-pointer"
                 onClick={handleCopyReport}
                 type="button"
               >
@@ -226,23 +243,25 @@ export function FindingCard({ finding }: { finding: FindingData }) {
             <TooltipContent side="top">Copy markdown report</TooltipContent>
           </Tooltip>
 
-          {isExpanded ? (
-            <ChevronUp className="size-4" />
-          ) : (
-            <ChevronDown className="size-4" />
-          )}
+          <span aria-hidden="true" className="p-1 rounded transition-colors">
+            {isExpanded ? (
+              <ChevronUp className="size-3.5" />
+            ) : (
+              <ChevronDown className="size-3.5" />
+            )}
+          </span>
         </div>
       </button>
 
       {/* Expanded Details */}
       {isExpanded ? (
-        <div className="space-y-3.5 border-t border-border/30 px-4 pb-4 pt-3.5">
+        <div className="space-y-2.5 border-t border-border/20 px-3 pb-3 pt-2.5 text-xs">
           {finding.expected ? (
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
                 Expected
               </div>
-              <div className="mt-1 text-sm text-foreground">
+              <div className="mt-0.5 text-xs text-foreground/90 leading-relaxed">
                 {finding.expected}
               </div>
             </div>
@@ -250,10 +269,10 @@ export function FindingCard({ finding }: { finding: FindingData }) {
 
           {finding.actual ? (
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
                 Actual
               </div>
-              <div className="mt-1 text-sm text-foreground">
+              <div className="mt-0.5 text-xs text-foreground/90 leading-relaxed">
                 {finding.actual}
               </div>
             </div>
@@ -262,11 +281,11 @@ export function FindingCard({ finding }: { finding: FindingData }) {
           {finding.reproductionSteps && finding.reproductionSteps.length > 0 ? (
             <div>
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
                   Reproduction Steps
                 </span>
                 <button
-                  className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                  className="flex items-center gap-1 text-[10px] text-muted-foreground/70 hover:text-foreground transition-colors cursor-pointer"
                   onClick={handleCopySteps}
                   type="button"
                 >
@@ -280,7 +299,7 @@ export function FindingCard({ finding }: { finding: FindingData }) {
                   </span>
                 </button>
               </div>
-              <ol className="mt-1.5 list-decimal space-y-1 pl-4 text-sm text-foreground">
+              <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-xs text-foreground/90 leading-relaxed">
                 {finding.reproductionSteps.map((step) => (
                   <li key={step}>{step}</li>
                 ))}
@@ -290,19 +309,19 @@ export function FindingCard({ finding }: { finding: FindingData }) {
 
           {finding.evidence && finding.evidence.length > 0 ? (
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Evidence & Artifacts
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                Evidence
               </div>
-              <div className="mt-1.5 space-y-1">
+              <div className="mt-1 space-y-1">
                 {finding.evidence.map((e) => (
                   <div
-                    className="flex items-start gap-2 rounded-md bg-background/60 border border-border/30 px-2.5 py-1.5 text-xs"
+                    className="flex items-start gap-1.5 rounded bg-background/50 border border-border/20 px-2 py-1 text-[11px]"
                     key={`${e.type}-${e.value}`}
                   >
-                    <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase text-muted-foreground font-semibold">
+                    <span className="shrink-0 rounded bg-muted px-1 py-0.5 font-mono text-[9px] uppercase text-muted-foreground font-semibold">
                       {e.type}
                     </span>
-                    <span className="text-foreground break-all">
+                    <span className="text-foreground/90 break-all leading-tight">
                       {e.description ?? e.value}
                     </span>
                   </div>
@@ -312,10 +331,10 @@ export function FindingCard({ finding }: { finding: FindingData }) {
           ) : null}
 
           {/* Footer with Metadata & Actions */}
-          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/20 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border/15 text-[11px] text-muted-foreground/80">
             {finding.severity ? (
-              <div className="flex items-center gap-1.5">
-                <AlertCircle className="size-3.5" />
+              <div className="flex items-center gap-1">
+                <CircleAlert className="size-3" />
                 <span>
                   Severity:{" "}
                   <span className="font-medium capitalize text-foreground">
@@ -327,9 +346,9 @@ export function FindingCard({ finding }: { finding: FindingData }) {
               <div />
             )}
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <Button
-                className="h-7 text-xs px-2.5 gap-1.5"
+                className="h-6 text-[11px] px-2 gap-1 rounded"
                 onClick={handleCopyReport}
                 size="sm"
                 variant="outline"
@@ -339,11 +358,11 @@ export function FindingCard({ finding }: { finding: FindingData }) {
                 ) : (
                   <FileText className="size-3" />
                 )}
-                <span>Copy Bug Report</span>
+                <span>Copy Report</span>
               </Button>
 
               <Button
-                className="h-7 text-xs px-2.5 gap-1.5"
+                className="h-6 text-[11px] px-2 gap-1 rounded"
                 onClick={handleDownloadReport}
                 size="sm"
                 variant="outline"

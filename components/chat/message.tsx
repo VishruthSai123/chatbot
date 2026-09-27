@@ -393,7 +393,7 @@ const PurePreviewMessage = ({
             : null;
 
         return (
-          <div className="w-full space-y-3" key={`qa-group-${message.id}`}>
+          <div className="w-full space-y-2.5" key={`qa-group-${message.id}`}>
             <AgentProcessing
               isLoading={isLoading}
               messageId={message.id}
@@ -401,7 +401,7 @@ const PurePreviewMessage = ({
             />
 
             {rawFinding ? (
-              <div className="w-[min(100%,500px)] animate-in fade-in-0 duration-300">
+              <div className="w-full max-w-[min(100%,560px)] animate-in fade-in-0 duration-300">
                 <FindingCard
                   finding={{
                     actual: String(rawFinding.actual ?? ""),
