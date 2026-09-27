@@ -203,6 +203,20 @@ export async function runBrowserTask({
 }: RunBrowserTaskOptions): Promise<RunBrowserTaskResult> {
   const client = getBrowserUseClient();
 
+  // 0. Pre-creation check: If cancellation was already requested before we even started
+  if (isCancelled?.()) {
+    console.log(
+      `[BrowserUse] Cancellation already requested for session ${sessionId}. Aborting task launch.`
+    );
+    return {
+      isStopped: true,
+      isSuccess: false,
+      output: "Task stopped by user",
+      steps: [],
+      taskId: null,
+    };
+  }
+
   // 1. Immediately create task on Browser Use Cloud
   console.log(
     `[BrowserUse] Initiating cloud task on session ${sessionId}: "${instruction.slice(0, 80)}..."`
@@ -221,10 +235,19 @@ export async function runBrowserTask({
   // 3. Early check: Was cancellation requested while task was being created?
   if (isCancelled?.()) {
     console.log(
-      `[BrowserUse] Cancellation was already requested for task ${taskId}. Halting immediately...`
+      `[BrowserUse] Cancellation was requested while creating task ${taskId}. Halting immediately...`
     );
     try {
       await client.tasks.stop(taskId);
+      const waitDeadline = Date.now() + 3000;
+      while (Date.now() < waitDeadline) {
+        // biome-ignore lint/performance/noAwaitInLoops: sequential status check
+        const st = await client.tasks.status(taskId).catch(() => null);
+        if (st && (st.status === "stopped" || st.status === "finished")) {
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+      }
     } catch {
       /* non-fatal */
     }
@@ -255,6 +278,15 @@ export async function runBrowserTask({
         try {
           // biome-ignore lint/performance/noAwaitInLoops: sequential stop request
           await client.tasks.stop(taskId);
+          const waitDeadline = Date.now() + 3000;
+          while (Date.now() < waitDeadline) {
+            // biome-ignore lint/performance/noAwaitInLoops: sequential status check
+            const st = await client.tasks.status(taskId).catch(() => null);
+            if (st && (st.status === "stopped" || st.status === "finished")) {
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 200));
+          }
         } catch {
           /* non-fatal */
         }

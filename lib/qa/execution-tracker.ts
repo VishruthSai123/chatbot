@@ -168,9 +168,9 @@ function abortChat(chatId: string, reason?: string) {
   }
 }
 
-function setActiveTaskId(chatId: string, runId: string, taskId: string) {
+function setActiveTaskId(chatId: string, _runId: string, taskId: string) {
   const run = registry.activeRunsByChat.get(chatId);
-  if (run && run.runId === runId) {
+  if (run) {
     run.activeTaskId = taskId;
     run.lastActivityAt = new Date().toISOString();
 
@@ -377,11 +377,16 @@ function completeRun({
     return null;
   }
 
-  // If run was already cancelled, do not complete
+  // If run was already cancelled or cancelling, do not complete
   if (
     run.executionState === "CANCELLED" ||
-    run.executionState === "CANCELLING"
+    run.executionState === "CANCELLING" ||
+    run.isCancelRequested ||
+    !canTransitionState(run.executionState, "COMPLETED")
   ) {
+    console.log(
+      `[ExecutionTracker] completeRun blocked because run is in state ${run.executionState} (isCancelRequested=${run.isCancelRequested})`
+    );
     return run;
   }
 
@@ -467,7 +472,26 @@ async function cancelRun({
   // 1. Immediately abort active stream/LLM execution so no further tool calls are initiated
   abortChat(chatId, reason);
 
-  const run = registry.activeRunsByChat.get(chatId);
+  let run = registry.activeRunsByChat.get(chatId);
+  if (!run) {
+    try {
+      const { getTestSessionByChatId } = await import("@/lib/db/queries");
+      const dbSession = await getTestSessionByChatId({ chatId });
+      if (dbSession?.executionSnapshot) {
+        run = restoreRun(dbSession.executionSnapshot as any);
+      } else if (dbSession) {
+        run = startRun({
+          browserSessionId: dbSession.browserSessionId ?? undefined,
+          chatId,
+          sessionId: dbSession.id,
+          targetUrl: dbSession.targetUrl,
+        });
+      }
+    } catch {
+      /* non-fatal */
+    }
+  }
+
   if (!run) {
     return null;
   }
@@ -491,48 +515,91 @@ async function cancelRun({
   run.cancellationReason = reason;
   run.interruptedAt = now;
   run.lastActivityAt = now;
+  run.currentAction = "Stopping test execution...";
   run.sequence += 1;
 
   // Determine last confirmed action
   const lastStep = run.steps.at(-1) ?? null;
   run.lastConfirmedAction = lastStep ? lastStep.action : run.currentAction;
 
-  // Stop active Browser Use task immediately if running, and wait for confirmation
-  if (run.activeTaskId) {
+  // Persist CANCELLING state snapshot immediately so any concurrent reader/poller sees it
+  await persistExecutionSnapshot(run);
+
+  // Stop active Browser Use task immediately on cloud
+  let client: ReturnType<typeof getBrowserUseClient> | null = null;
+  try {
+    client = getBrowserUseClient();
+  } catch (err) {
+    console.warn(
+      "[ExecutionTracker] BrowserUse client not available for stop:",
+      err
+    );
+  }
+
+  if (client && run.activeTaskId) {
     try {
-      const client = getBrowserUseClient();
       await client.tasks.stop(run.activeTaskId);
       console.log(
-        `[ExecutionTracker] Requested stop for active cloud task: ${run.activeTaskId}. Waiting for confirmation...`
+        `[ExecutionTracker] Requested stop for active cloud task: ${run.activeTaskId}.`
       );
-
-      // Verify that cloud task acknowledged stopped status
-      const deadline = Date.now() + 3500;
-      while (Date.now() < deadline) {
-        // biome-ignore lint/performance/noAwaitInLoops: sequential status polling
-        const st = await client.tasks
-          .status(run.activeTaskId)
-          .catch(() => null);
-        if (st && (st.status === "stopped" || st.status === "finished")) {
-          console.log(
-            `[ExecutionTracker] Cloud task ${run.activeTaskId} confirmed ${st.status}`
-          );
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 350));
-      }
     } catch (err) {
       console.warn(
-        `[ExecutionTracker] Failed to stop cloud task ${run.activeTaskId} (may have already finished):`,
+        `[ExecutionTracker] Failed to stop cloud task ${run.activeTaskId} (may have finished or stopped):`,
         err
       );
     }
   }
 
+  // Also query session's task list to stop any in-flight or created task
+  if (client && run.browserSessionId) {
+    try {
+      const taskList = await client.tasks
+        .list({ sessionId: run.browserSessionId })
+        .catch(() => null);
+      const items = taskList?.items ?? (taskList as any)?.tasks ?? [];
+      if (Array.isArray(items)) {
+        for (const t of items) {
+          if (t.status === "created" || t.status === "started") {
+            console.log(
+              `[ExecutionTracker] Stopping in-flight task ${t.id} on session ${run.browserSessionId}`
+            );
+            // biome-ignore lint/performance/noAwaitInLoops: sequential stop on in-flight tasks
+            await client.tasks.stop(t.id).catch(() => null);
+            if (!run.activeTaskId) {
+              run.activeTaskId = t.id;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[ExecutionTracker] Error querying session tasks for ${run.browserSessionId}:`,
+        err
+      );
+    }
+  }
+
+  // Wait for cloud confirmation that task has halted
+  if (client && run.activeTaskId) {
+    const deadline = Date.now() + 3500;
+    while (Date.now() < deadline) {
+      // biome-ignore lint/performance/noAwaitInLoops: sequential status check
+      const st = await client.tasks.status(run.activeTaskId).catch(() => null);
+      if (st && (st.status === "stopped" || st.status === "finished")) {
+        console.log(
+          `[ExecutionTracker] Cloud task ${run.activeTaskId} confirmed ${st.status}`
+        );
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+
   // Complete cancellation transition
   run.executionState = "CANCELLED";
-  run.completedAt = now;
+  run.completedAt = new Date().toISOString();
   run.currentAction = "Test stopped by user";
+  run.sequence += 1;
 
   // Mark last step cleanly
   if (lastStep && lastStep.status === "running") {
@@ -540,6 +607,16 @@ async function cancelRun({
   }
 
   await persistExecutionSnapshot(run);
+
+  try {
+    const { updateTestSessionStatus } = await import("@/lib/db/queries");
+    if (run.sessionId) {
+      await updateTestSessionStatus({ id: run.sessionId, status: "cancelled" });
+    }
+  } catch {
+    /* non-fatal */
+  }
+
   return run;
 }
 

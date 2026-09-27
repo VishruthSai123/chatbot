@@ -42,9 +42,33 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
         }));
       }
 
+      if (streamPart.type === "data-qa-status") {
+        setMetadata((prev) => {
+          if (isTerminalExecutionState(prev?.executionState)) {
+            return prev;
+          }
+          return {
+            ...prev,
+            currentAction:
+              typeof streamPart.data === "string"
+                ? streamPart.data
+                : prev?.currentAction,
+          };
+        });
+      }
+
       if (streamPart.type === "data-qa-execution") {
         const exec = streamPart.data;
         setMetadata((prev) => {
+          // If currently CANCELLED or CANCELLING, do NOT allow regression to RUNNING, WAITING, FINALIZING, or COMPLETED
+          if (
+            (prev?.executionState === "CANCELLED" ||
+              prev?.executionState === "CANCELLING") &&
+            exec.executionState !== "CANCELLED"
+          ) {
+            return prev;
+          }
+
           // Terminal state protection: terminal states can NEVER be regressed
           if (
             isTerminalExecutionState(prev?.executionState) &&

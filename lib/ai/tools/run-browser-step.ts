@@ -24,12 +24,21 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
 
         // Ensure run is active in tracker
         let activeRun = ExecutionTracker.getActiveRun(chatId);
-        if (!activeRun) {
+        if (
+          !activeRun ||
+          activeRun.executionState === "COMPLETED" ||
+          activeRun.executionState === "CANCELLED" ||
+          activeRun.executionState === "FAILED"
+        ) {
+          const { getTestSessionByChatId } = await import("@/lib/db/queries");
+          const existingSession = await getTestSessionByChatId({
+            chatId,
+          }).catch(() => null);
           activeRun = ExecutionTracker.startRun({
             browserSessionId,
             chatId,
-            sessionId: browserSessionId,
-            targetUrl: "https://localhost",
+            sessionId: existingSession?.id || browserSessionId,
+            targetUrl: existingSession?.targetUrl || "https://localhost",
           });
         }
 
@@ -56,11 +65,29 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
           instruction,
           isCancelled: () => ExecutionTracker.isCancelRequested(chatId),
           onHeartbeat: (elapsedSeconds) => {
+            const current = ExecutionTracker.getActiveRun(chatId);
             dataStream.write({
               data: `Agent executing browser actions (${elapsedSeconds}s)...`,
               transient: true,
               type: "data-qa-status",
             });
+            if (current && current.executionState === "RUNNING") {
+              dataStream.write({
+                data: {
+                  currentAction: `Agent executing browser actions (${elapsedSeconds}s)...`,
+                  currentStep: stepCount,
+                  executionState: "RUNNING",
+                  lastActivityAt: new Date().toISOString(),
+                  runId: current.runId,
+                  sequence: current.sequence,
+                  sessionId: current.sessionId,
+                  startedAt: current.startedAt,
+                  steps: current.steps,
+                },
+                transient: true,
+                type: "data-qa-execution",
+              });
+            }
           },
           onStep: (step) => {
             stepCount += 1;

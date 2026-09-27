@@ -37,6 +37,7 @@ import {
   ModelSelectorName,
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector";
+import { useArtifact } from "@/hooks/use-artifact";
 import {
   type ChatModel,
   chatModels,
@@ -110,6 +111,7 @@ function PureMultimodalInput({
   isLoading?: boolean;
 }) {
   const router = useRouter();
+  const { setMetadata } = useArtifact();
   const { setTheme, resolvedTheme } = useTheme();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
@@ -454,29 +456,98 @@ function PureMultimodalInput({
     ]
   );
 
-  const handleCustomStop = useCallback(() => {
+  const handleCustomStop = useCallback(async () => {
+    // 1. Immediately reflect CANCELLING state across the entire UI
+    setMetadata?.((prev: any) => ({
+      ...prev,
+      currentAction: "Stopping test execution...",
+      executionState: "CANCELLING",
+      status: "working",
+    }));
+
+    window.dispatchEvent(
+      new CustomEvent("qa:cancelling-requested", {
+        detail: { chatId },
+      })
+    );
+
+    // 2. Request authoritative backend cancellation and wait for confirmed execution state
+    if (chatId) {
+      try {
+        const res = await fetch("/api/qa/session", {
+          body: JSON.stringify({ action: "stop", chatId }),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        });
+        const data = await res.json();
+        setMetadata?.((prev: any) => ({
+          ...prev,
+          currentAction:
+            data?.execution?.currentAction || "Test was stopped by user.",
+          executionState: data?.execution?.executionState || "CANCELLED",
+          lastConfirmedAction: data?.execution?.lastConfirmedAction,
+          recentSteps: data?.execution?.steps || prev?.recentSteps,
+          status: "stopped",
+        }));
+      } catch {
+        setMetadata?.((prev: any) => ({
+          ...prev,
+          currentAction: "Test was stopped by user.",
+          executionState: "CANCELLED",
+          status: "stopped",
+        }));
+      }
+    }
+
+    // 3. Notify all components that cancellation is confirmed on backend
+    window.dispatchEvent(
+      new CustomEvent("qa:stop-requested", {
+        detail: { chatId },
+      })
+    );
+
+    // 4. Cleanly abort the client stream
     stop();
     setMessages((prev) => prev);
-    if (chatId) {
-      fetch("/api/qa/session", {
-        body: JSON.stringify({ action: "stop", chatId }),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      }).catch(() => null);
-    }
-  }, [chatId, setMessages, stop]);
+  }, [chatId, setMessages, setMetadata, stop]);
+
+  useEffect(() => {
+    const handleRemoteCancelling = (e: Event) => {
+      const customEvent = e as CustomEvent<{ chatId: string }>;
+      if (customEvent.detail?.chatId === chatId) {
+        setMetadata?.((prev: any) => ({
+          ...prev,
+          currentAction: "Stopping test execution...",
+          executionState: "CANCELLING",
+          status: "working",
+        }));
+      }
+    };
+    window.addEventListener("qa:cancelling-requested", handleRemoteCancelling);
+    return () =>
+      window.removeEventListener(
+        "qa:cancelling-requested",
+        handleRemoteCancelling
+      );
+  }, [chatId, setMetadata]);
 
   useEffect(() => {
     const handleRemoteStop = (e: Event) => {
       const customEvent = e as CustomEvent<{ chatId: string }>;
       if (customEvent.detail?.chatId === chatId) {
+        setMetadata?.((prev: any) => ({
+          ...prev,
+          currentAction: "Test was stopped by user.",
+          executionState: "CANCELLED",
+          status: "stopped",
+        }));
         stop();
       }
     };
     window.addEventListener("qa:stop-requested", handleRemoteStop);
     return () =>
       window.removeEventListener("qa:stop-requested", handleRemoteStop);
-  }, [chatId, stop]);
+  }, [chatId, setMetadata, stop]);
 
   useEffect(() => {
     const handleResume = (e: Event) => {

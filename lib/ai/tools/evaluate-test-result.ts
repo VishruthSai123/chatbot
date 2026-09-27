@@ -33,12 +33,37 @@ export const evaluateTestResult = ({
       severity,
     }) => {
       try {
+        // Discard evaluation if user requested cancellation or run is in a cancelled/cancelling state
+        const activeRun = ExecutionTracker.getActiveRun(chatId);
+        const isCancelled =
+          ExecutionTracker.isCancelRequested(chatId) ||
+          activeRun?.executionState === "CANCELLED" ||
+          activeRun?.executionState === "CANCELLING";
+
+        const existingSession = await getTestSessionByChatId({ chatId }).catch(
+          () => null
+        );
+
+        if (isCancelled || existingSession?.status === "cancelled") {
+          console.log(
+            `[evaluateTestResult] Discarding evaluation because run was cancelled for chat ${chatId}`
+          );
+          return {
+            actual: "Test execution was stopped by user.",
+            cancelled: true,
+            expected: "Execution stopped",
+            findingId: null,
+            status: "uncertain",
+            summary: "Test was stopped by user.",
+            title: "Test Stopped",
+          };
+        }
+
         // Transition tracker to FINALIZING
         ExecutionTracker.recordFinalizing({ chatId });
 
         // Resolve a valid DB TestSession ID
         let resolvedTestSessionId: string | null = null;
-        const existingSession = await getTestSessionByChatId({ chatId });
 
         if (
           testSessionId &&

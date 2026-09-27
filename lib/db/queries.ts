@@ -645,6 +645,7 @@ export async function updateTestSessionStatus({
   browserSessionId,
   liveUrl,
   executionSnapshot,
+  force = false,
 }: {
   id: string;
   status:
@@ -658,8 +659,23 @@ export async function updateTestSessionStatus({
   browserSessionId?: string;
   liveUrl?: string;
   executionSnapshot?: any;
+  force?: boolean;
 }) {
   try {
+    // Terminal state protection: If session is already cancelled, prevent late callbacks from marking it completed/evaluating/active
+    const [existing] = await db
+      .select({ status: testSession.status })
+      .from(testSession)
+      .where(eq(testSession.id, id))
+      .limit(1);
+
+    if (existing?.status === "cancelled" && status !== "cancelled" && !force) {
+      console.log(
+        `[updateTestSessionStatus] Ignored update to '${status}' because session ${id} is cancelled`
+      );
+      return existing as any;
+    }
+
     const [updated] = await db
       .update(testSession)
       .set({
@@ -681,6 +697,7 @@ export async function updateTestSessionExecutionSnapshot({
   id,
   executionSnapshot,
   status,
+  force = false,
 }: {
   id: string;
   executionSnapshot: any;
@@ -692,13 +709,27 @@ export async function updateTestSessionExecutionSnapshot({
     | "error"
     | "cancelled"
     | "paused";
+  force?: boolean;
 }) {
   try {
+    let safeStatus = status;
+    if (safeStatus && safeStatus !== "cancelled" && !force) {
+      const [existing] = await db
+        .select({ status: testSession.status })
+        .from(testSession)
+        .where(eq(testSession.id, id))
+        .limit(1);
+
+      if (existing?.status === "cancelled") {
+        safeStatus = undefined;
+      }
+    }
+
     const [updated] = await db
       .update(testSession)
       .set({
         executionSnapshot,
-        ...(status ? { status } : {}),
+        ...(safeStatus ? { status: safeStatus } : {}),
         updatedAt: new Date(),
       })
       .where(eq(testSession.id, id))
@@ -735,6 +766,22 @@ export async function saveQAFinding({
   suggestedFix?: string;
 }) {
   try {
+    // If the associated testSession was cancelled, do NOT persist findings
+    if (testSessionId) {
+      const [sessionRec] = await db
+        .select({ status: testSession.status })
+        .from(testSession)
+        .where(eq(testSession.id, testSessionId))
+        .limit(1);
+
+      if (sessionRec?.status === "cancelled") {
+        console.log(
+          `[saveQAFinding] Discarded finding '${title}' because test session ${testSessionId} is cancelled`
+        );
+        return null;
+      }
+    }
+
     const [finding] = await db
       .insert(qaFinding)
       .values({

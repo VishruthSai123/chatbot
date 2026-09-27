@@ -157,29 +157,46 @@ export function BrowserPreview({
     if (sessionData?.session?.liveUrl && setMetadata) {
       const s = sessionData.session;
       const exec = sessionData.execution;
-      setMetadata((prev) => ({
-        ...prev,
-        browserScreenHeight: s.browserScreenHeight ?? prev.browserScreenHeight,
-        browserScreenWidth: s.browserScreenWidth ?? prev.browserScreenWidth,
-        browserSessionId: s.browserSessionId,
-        liveUrl: s.liveUrl ?? undefined,
-        status:
-          (s.status === "active" ? "live" : (s.status as BrowserStatus)) ??
-          "live",
-        targetUrl: s.targetUrl,
-        ...(exec
-          ? {
-              currentAction: exec.currentAction || prev.currentAction,
-              errorMessage: exec.error || prev.errorMessage,
-              executionState: exec.executionState || prev.executionState,
-              findingId: exec.findingId || prev.findingId,
-              recentSteps: exec.steps || prev.recentSteps,
-              runId: exec.runId || prev.runId,
-              sequence: exec.sequence || prev.sequence,
-              verdict: exec.verdict || prev.verdict,
-            }
-          : {}),
-      }));
+      setMetadata((prev) => {
+        // If currently CANCELLED or CANCELLING, do NOT allow regression to RUNNING, WAITING, or COMPLETED
+        if (
+          (prev.executionState === "CANCELLED" ||
+            prev.executionState === "CANCELLING") &&
+          exec?.executionState !== "CANCELLED"
+        ) {
+          return prev;
+        }
+
+        // Monotonic sequence check: ignore stale snapshots
+        if (prev.sequence && exec?.sequence && exec.sequence < prev.sequence) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          browserScreenHeight:
+            s.browserScreenHeight ?? prev.browserScreenHeight,
+          browserScreenWidth: s.browserScreenWidth ?? prev.browserScreenWidth,
+          browserSessionId: s.browserSessionId,
+          liveUrl: s.liveUrl ?? undefined,
+          status:
+            (s.status === "active" ? "live" : (s.status as BrowserStatus)) ??
+            "live",
+          targetUrl: s.targetUrl,
+          ...(exec
+            ? {
+                currentAction: exec.currentAction || prev.currentAction,
+                errorMessage: exec.error || prev.errorMessage,
+                executionState: exec.executionState || prev.executionState,
+                findingId: exec.findingId || prev.findingId,
+                recentSteps: exec.steps || prev.recentSteps,
+                runId: exec.runId || prev.runId,
+                sequence: exec.sequence || prev.sequence,
+                verdict: exec.verdict || prev.verdict,
+              }
+            : {}),
+        };
+      });
     }
   }, [sessionData, setMetadata]);
 
@@ -230,9 +247,15 @@ export function BrowserPreview({
     setIsStopping(true);
     setMetadata?.((prev) => ({
       ...prev,
-      currentAction: "Stopping execution safely...",
+      currentAction: "Stopping test execution...",
       executionState: "CANCELLING",
+      status: "working",
     }));
+    window.dispatchEvent(
+      new CustomEvent("qa:cancelling-requested", {
+        detail: { chatId },
+      })
+    );
     try {
       const res = await fetch("/api/qa/session", {
         body: JSON.stringify({ action: "stop", chatId }),
@@ -243,7 +266,8 @@ export function BrowserPreview({
       mutateSession();
       setMetadata?.((prev) => ({
         ...prev,
-        currentAction: data?.execution?.currentAction || "Test stopped by user",
+        currentAction:
+          data?.execution?.currentAction || "Test was stopped by user.",
         executionState: data?.execution?.executionState || "CANCELLED",
         lastConfirmedAction: data?.execution?.lastConfirmedAction,
         recentSteps: data?.execution?.steps || prev.recentSteps,
@@ -302,13 +326,35 @@ export function BrowserPreview({
   }, [chatId, isResuming, mutateSession, setMetadata]);
 
   useEffect(() => {
+    const handleRemoteCancelling = (e: Event) => {
+      const customEvent = e as CustomEvent<{ chatId: string }>;
+      if (customEvent.detail?.chatId === chatId) {
+        setIsStopping(true);
+        setMetadata?.((prev) => ({
+          ...prev,
+          currentAction: "Stopping test execution...",
+          executionState: "CANCELLING",
+          status: "working",
+        }));
+      }
+    };
+    window.addEventListener("qa:cancelling-requested", handleRemoteCancelling);
+    return () =>
+      window.removeEventListener(
+        "qa:cancelling-requested",
+        handleRemoteCancelling
+      );
+  }, [chatId, setMetadata]);
+
+  useEffect(() => {
     const handleRemoteStop = (e: Event) => {
       const customEvent = e as CustomEvent<{ chatId: string }>;
       if (customEvent.detail?.chatId === chatId) {
+        setIsStopping(false);
         mutateSession();
         setMetadata?.((prev) => ({
           ...prev,
-          currentAction: "Test stopped by user",
+          currentAction: "Test was stopped by user.",
           executionState: "CANCELLED",
           status: "stopped",
         }));

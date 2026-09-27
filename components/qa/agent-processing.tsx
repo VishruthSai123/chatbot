@@ -100,7 +100,8 @@ export const AgentProcessing = memo(
         execState === "STARTING" ||
         execState === "RUNNING" ||
         execState === "WAITING" ||
-        execState === "FINALIZING");
+        execState === "FINALIZING" ||
+        execState === "CANCELLING");
 
     // Track active execution duration
     useEffect(() => {
@@ -190,15 +191,19 @@ export const AgentProcessing = memo(
               ? "completed"
               : isPartError
                 ? "failed"
-                : "running",
+                : isCancelled || execState === "CANCELLING"
+                  ? "completed"
+                  : "running",
         });
       }
 
-      // 3. Evaluation & Assertion Step
+      // 3. Evaluation & Assertion Step (Only if not cancelled or cancelling)
       if (
-        evaluateTestResultPart ||
-        execState === "FINALIZING" ||
-        execState === "COMPLETED"
+        !isCancelled &&
+        execState !== "CANCELLING" &&
+        (evaluateTestResultPart ||
+          execState === "FINALIZING" ||
+          execState === "COMPLETED")
       ) {
         const isPartError =
           evaluateTestResultPart?.state === "output-error" ||
@@ -228,10 +233,15 @@ export const AgentProcessing = memo(
       evaluateTestResultPart,
       metadata?.targetUrl,
       execState,
+      isCancelled,
     ]);
 
     // Descriptive live summary text projected from canonical state
     const activeDescription = useMemo(() => {
+      if (execState === "CANCELLING") {
+        return "Stopping test execution...";
+      }
+
       if (isCancelled) {
         return "Test was stopped by user.";
       }
