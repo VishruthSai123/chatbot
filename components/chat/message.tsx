@@ -3,6 +3,7 @@ import type { UseChatHelpers } from "@ai-sdk/react";
 import { useCallback } from "react";
 import { AgentProcessing } from "@/components/qa/agent-processing";
 import { FindingCard } from "@/components/qa/finding-card";
+import { useArtifact } from "@/hooks/use-artifact";
 import type { Vote } from "@/lib/db/schema";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
@@ -110,6 +111,7 @@ const PurePreviewMessage = ({
     (part) => part.type === "file"
   );
 
+  const { metadata } = useArtifact();
   useDataStream();
 
   const isUser = message.role === "user";
@@ -359,6 +361,12 @@ const PurePreviewMessage = ({
       if (!qaBlockRendered) {
         qaBlockRendered = true;
 
+        const isThisMessageStopped = qaParts.some(
+          (p) =>
+            Boolean((p as any).output?.isStopped) ||
+            (p as any).output?.output === "Test execution was stopped by user."
+        );
+
         const evalPart = qaParts.find(
           (p) =>
             p.type === "tool-evaluateTestResult" &&
@@ -368,6 +376,22 @@ const PurePreviewMessage = ({
             !("error" in (p.output as Record<string, unknown>))
         ) as any;
 
+        const hasValidEvalPart =
+          evalPart &&
+          !evalPart.output?.cancelled &&
+          evalPart.output?.title !== "Test Stopped";
+
+        const rawFinding = hasValidEvalPart
+          ? evalPart.output
+          : !isThisMessageStopped &&
+              metadata?.finding &&
+              (metadata.executionState === "COMPLETED" ||
+                metadata.status === "completed") &&
+              !metadata.finding.cancelled &&
+              metadata.finding.title !== "Test Stopped"
+            ? metadata.finding
+            : null;
+
         return (
           <div className="w-full space-y-3" key={`qa-group-${message.id}`}>
             <AgentProcessing
@@ -376,34 +400,34 @@ const PurePreviewMessage = ({
               parts={qaParts}
             />
 
-            {evalPart ? (
+            {rawFinding ? (
               <div className="w-[min(100%,500px)] animate-in fade-in-0 duration-300">
                 <FindingCard
                   finding={{
-                    actual: String(evalPart.output.actual ?? ""),
-                    evidence: Array.isArray(evalPart.output.evidence)
-                      ? (evalPart.output.evidence as any)
+                    actual: String(rawFinding.actual ?? ""),
+                    evidence: Array.isArray(rawFinding.evidence)
+                      ? (rawFinding.evidence as any)
                       : [],
-                    expected: String(evalPart.output.expected ?? ""),
-                    findingId: evalPart.output.findingId
-                      ? String(evalPart.output.findingId)
+                    expected: String(rawFinding.expected ?? ""),
+                    findingId: rawFinding.findingId
+                      ? String(rawFinding.findingId)
                       : null,
                     reproductionSteps: Array.isArray(
-                      evalPart.output.reproductionSteps
+                      rawFinding.reproductionSteps
                     )
-                      ? (evalPart.output.reproductionSteps as string[])
+                      ? (rawFinding.reproductionSteps as string[])
                       : [],
-                    severity: evalPart.output.severity
-                      ? String(evalPart.output.severity)
+                    severity: rawFinding.severity
+                      ? String(rawFinding.severity)
                       : "medium",
                     status:
-                      (evalPart.output.status as
+                      (rawFinding.status as
                         | "pass"
                         | "fail"
                         | "uncertain"
                         | "blocked") ?? "uncertain",
-                    summary: String(evalPart.output.summary ?? ""),
-                    title: String(evalPart.output.title ?? "Test Result"),
+                    summary: String(rawFinding.summary ?? ""),
+                    title: String(rawFinding.title ?? "Test Result"),
                   }}
                 />
               </div>

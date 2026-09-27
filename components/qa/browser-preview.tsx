@@ -22,7 +22,10 @@ import {
 } from "@/components/ui/tooltip";
 import { useActiveChat } from "@/hooks/use-active-chat";
 import { useArtifact } from "@/hooks/use-artifact";
-import type { CanonicalExecutionState } from "@/lib/qa/execution-types";
+import {
+  type CanonicalExecutionState,
+  isTerminalExecutionState,
+} from "@/lib/qa/execution-types";
 import { cn, fetcher } from "@/lib/utils";
 import { Shimmer } from "../ai-elements/shimmer";
 
@@ -111,25 +114,24 @@ export function BrowserPreview({
   const isExecuting =
     metadata?.executionState === "STARTING" ||
     metadata?.executionState === "RUNNING" ||
+    metadata?.executionState === "WAITING" ||
+    metadata?.executionState === "FINALIZING" ||
     metadata?.executionState === "CANCELLING" ||
     metadata?.executionState === "RESUMING" ||
     metadata?.status === "working";
 
-  // Reconcile from backend if liveUrl is missing OR if execution is actively running/recovering
-  const shouldFetchSession =
-    Boolean(chatId) && (!metadata?.liveUrl || isExecuting);
-
+  // Keep sessionQuery bound whenever chatId exists so mutateSession() always works!
   const sessionQuery = useMemo(() => {
-    if (!shouldFetchSession) {
+    if (!chatId) {
       return null;
     }
-    const params = new URLSearchParams({ chatId: chatId ?? "" });
+    const params = new URLSearchParams({ chatId });
     if (wrapperDimensions) {
       params.set("width", String(wrapperDimensions.width));
       params.set("height", String(wrapperDimensions.height));
     }
     return `/api/qa/session?${params.toString()}`;
-  }, [shouldFetchSession, chatId, wrapperDimensions]);
+  }, [chatId, wrapperDimensions]);
 
   const {
     data: sessionData,
@@ -137,6 +139,7 @@ export function BrowserPreview({
     isLoading: isSessionFetching,
     mutate: mutateSession,
   } = useSWR<{
+    finding?: any;
     session: {
       id: string;
       browserSessionId: string;
@@ -148,7 +151,7 @@ export function BrowserPreview({
     } | null;
     execution: any;
   }>(sessionQuery, fetcher, {
-    refreshInterval: isExecuting ? 2500 : 0,
+    refreshInterval: isExecuting ? 2000 : 0,
     revalidateOnFocus: false,
   });
 
@@ -157,25 +160,54 @@ export function BrowserPreview({
     if (sessionData?.session?.liveUrl && setMetadata) {
       const s = sessionData.session;
       const exec = sessionData.execution;
+      const f = sessionData.finding;
       setMetadata((prev) => {
         const safePrev = prev ?? {};
-        // If currently CANCELLED or CANCELLING, do NOT allow regression to RUNNING, WAITING, or COMPLETED
+
+        const isSameRun =
+          !exec?.runId || !safePrev?.runId || exec.runId === safePrev.runId;
+        const isNewerSequence = Boolean(
+          exec?.sequence &&
+            safePrev?.sequence &&
+            exec.sequence > safePrev.sequence
+        );
+        const isResumingOrStarting =
+          exec?.executionState === "RESUMING" ||
+          exec?.executionState === "STARTING" ||
+          exec?.executionState === "RUNNING";
+
+        // Only block regression from CANCELLED if it's the exact same run and not newer/resuming
         if (
           (safePrev.executionState === "CANCELLED" ||
             safePrev.executionState === "CANCELLING") &&
-          exec?.executionState !== "CANCELLED"
+          exec?.executionState !== "CANCELLED" &&
+          isSameRun &&
+          !isNewerSequence &&
+          !isResumingOrStarting
         ) {
           return safePrev;
         }
 
-        // Monotonic sequence check: ignore stale snapshots
+        // Monotonic sequence check for same run
         if (
+          isSameRun &&
           safePrev.sequence &&
           exec?.sequence &&
           exec.sequence < safePrev.sequence
         ) {
           return safePrev;
         }
+
+        const isTerminal = isTerminalExecutionState(exec?.executionState);
+        const computedStatus =
+          exec?.executionState === "COMPLETED"
+            ? "idle"
+            : exec?.executionState === "FAILED" ||
+                exec?.executionState === "TIMED_OUT"
+              ? "error"
+              : exec?.executionState === "CANCELLED"
+                ? "stopped"
+                : "working";
 
         return {
           ...safePrev,
@@ -185,20 +217,29 @@ export function BrowserPreview({
             s.browserScreenWidth ?? safePrev.browserScreenWidth,
           browserSessionId: s.browserSessionId,
           liveUrl: s.liveUrl ?? undefined,
-          status:
-            (s.status === "active" ? "live" : (s.status as BrowserStatus)) ??
-            "live",
+          status: isTerminal
+            ? computedStatus
+            : ((s.status === "active" ? "live" : (s.status as BrowserStatus)) ??
+              safePrev.status ??
+              "live"),
           targetUrl: s.targetUrl,
+          ...(f
+            ? {
+                finding: f,
+                findingId: f.findingId || safePrev.findingId,
+                verdict: f.status || safePrev.verdict,
+              }
+            : {}),
           ...(exec
             ? {
                 currentAction: exec.currentAction || safePrev.currentAction,
                 errorMessage: exec.error || safePrev.errorMessage,
                 executionState: exec.executionState || safePrev.executionState,
-                findingId: exec.findingId || safePrev.findingId,
+                findingId: exec.findingId || f?.findingId || safePrev.findingId,
                 recentSteps: exec.steps || safePrev.recentSteps,
                 runId: exec.runId || safePrev.runId,
                 sequence: exec.sequence || safePrev.sequence,
-                verdict: exec.verdict || safePrev.verdict,
+                verdict: exec.verdict || f?.status || safePrev.verdict,
               }
             : {}),
         };
@@ -236,7 +277,7 @@ export function BrowserPreview({
   }, [setMetadata]);
 
   const handleClose = useCallback(() => {
-    setArtifact((prev) => ({
+    setArtifact((prev: any) => ({
       ...prev,
       isVisible: false,
     }));

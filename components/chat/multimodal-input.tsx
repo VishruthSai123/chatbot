@@ -235,6 +235,22 @@ function PureMultimodalInput({
       `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}/chat/${chatId}`
     );
 
+    setMetadata?.((prev: any) => {
+      const safePrev = prev ?? {};
+      if (
+        safePrev.executionState === "CANCELLED" ||
+        safePrev.status === "stopped"
+      ) {
+        return {
+          ...safePrev,
+          currentAction: "Working...",
+          executionState: "STARTING",
+          status: "working",
+        };
+      }
+      return safePrev;
+    });
+
     sendMessage({
       parts: [
         ...attachments.map((attachment) => ({
@@ -265,6 +281,7 @@ function PureMultimodalInput({
     sendMessage,
     setAttachments,
     setLocalStorageInput,
+    setMetadata,
     width,
     chatId,
   ]);
@@ -594,6 +611,12 @@ function PureMultimodalInput({
         customEvent.detail?.chatId === chatId &&
         typeof sendMessage === "function"
       ) {
+        setMetadata?.((prev: any) => ({
+          ...(prev ?? {}),
+          currentAction: "Resuming test execution...",
+          executionState: "RESUMING",
+          status: "working",
+        }));
         (sendMessage as any)({
           parts: [
             {
@@ -608,7 +631,7 @@ function PureMultimodalInput({
     window.addEventListener("qa:resume-requested", handleResume);
     return () =>
       window.removeEventListener("qa:resume-requested", handleResume);
-  }, [chatId, sendMessage]);
+  }, [chatId, sendMessage, setMetadata]);
 
   return (
     <div className={cn("relative flex w-full flex-col gap-4", className)}>

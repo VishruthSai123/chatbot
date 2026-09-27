@@ -220,7 +220,8 @@ export async function POST(request: Request) {
           currentRun.isCancelRequested)
       ) {
         await ExecutionTracker.resumeRun({ chatId: id });
-      } else if (activeTestSession?.status === "cancelled") {
+      }
+      if (activeTestSession?.status === "cancelled") {
         await updateTestSessionStatus({
           force: true,
           id: activeTestSession.id,

@@ -60,30 +60,50 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
       if (streamPart.type === "data-qa-execution") {
         const exec = streamPart.data;
         setMetadata((prev) => {
-          // If currently CANCELLED or CANCELLING, do NOT allow regression to RUNNING, WAITING, FINALIZING, or COMPLETED
+          const safePrev = prev ?? {};
+          const isSameRun =
+            !exec?.runId || !safePrev?.runId || exec.runId === safePrev.runId;
+          const isNewerSequence = Boolean(
+            exec?.sequence &&
+              safePrev?.sequence &&
+              exec.sequence > safePrev.sequence
+          );
+          const isResumingOrStarting =
+            exec?.executionState === "RESUMING" ||
+            exec?.executionState === "STARTING" ||
+            exec?.executionState === "RUNNING";
+
+          // If currently CANCELLED or CANCELLING, only reject stale packets from the same run
           if (
-            (prev?.executionState === "CANCELLED" ||
-              prev?.executionState === "CANCELLING") &&
-            exec.executionState !== "CANCELLED"
+            (safePrev.executionState === "CANCELLED" ||
+              safePrev.executionState === "CANCELLING") &&
+            exec.executionState !== "CANCELLED" &&
+            isSameRun &&
+            !isNewerSequence &&
+            !isResumingOrStarting
           ) {
-            return prev;
+            return safePrev;
           }
 
-          // Terminal state protection: terminal states can NEVER be regressed
+          // Terminal state protection: terminal states can only be transitioned if starting or resuming or newer run
           if (
-            isTerminalExecutionState(prev?.executionState) &&
-            !isTerminalExecutionState(exec.executionState)
+            isTerminalExecutionState(safePrev.executionState) &&
+            !isTerminalExecutionState(exec.executionState) &&
+            isSameRun &&
+            !isNewerSequence &&
+            !isResumingOrStarting
           ) {
-            return prev;
+            return safePrev;
           }
 
-          // Monotonic sequence check: ignore stale packets from earlier steps
+          // Monotonic sequence check for same run
           if (
-            prev?.sequence &&
+            isSameRun &&
+            safePrev.sequence &&
             exec.sequence &&
-            exec.sequence < prev.sequence
+            exec.sequence < safePrev.sequence
           ) {
-            return prev;
+            return safePrev;
           }
 
           const isTerminal = isTerminalExecutionState(exec.executionState);
@@ -98,18 +118,33 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
                   : "working";
 
           return {
-            ...prev,
-            currentAction: exec.currentAction || prev?.currentAction,
-            errorMessage: exec.error || prev?.errorMessage,
+            ...safePrev,
+            currentAction: exec.currentAction || safePrev.currentAction,
+            errorMessage: exec.error || safePrev.errorMessage,
             executionState: exec.executionState,
-            findingId: exec.findingId || prev?.findingId,
-            recentSteps: exec.steps || prev?.recentSteps || [],
-            runId: exec.runId || prev?.runId,
+            findingId: exec.findingId || safePrev.findingId,
+            recentSteps: exec.steps || safePrev.recentSteps || [],
+            runId: exec.runId || safePrev.runId,
             sequence: exec.sequence,
             status: isTerminal
               ? computedStatus
-              : computedStatus || prev?.status,
-            verdict: exec.verdict || prev?.verdict,
+              : computedStatus || safePrev.status,
+            verdict: exec.verdict || safePrev.verdict,
+          };
+        });
+      }
+
+      if (streamPart.type === "data-qa-finding") {
+        const finding = streamPart.data;
+        setMetadata((prev) => {
+          const safePrev = prev ?? {};
+          return {
+            ...safePrev,
+            executionState: "COMPLETED",
+            finding,
+            findingId: finding.findingId || safePrev.findingId,
+            status: "idle",
+            verdict: (finding.status as any) || safePrev.verdict,
           };
         });
       }
@@ -117,11 +152,16 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
       if (streamPart.type === "data-qa-step") {
         const step = streamPart.data;
         setMetadata((prev) => {
-          if (isTerminalExecutionState(prev?.executionState)) {
-            return prev;
+          const safePrev = prev ?? {};
+          if (
+            (safePrev.executionState === "CANCELLED" ||
+              safePrev.executionState === "CANCELLING") &&
+            safePrev.status === "stopped"
+          ) {
+            return safePrev;
           }
 
-          const recent = prev?.recentSteps || [];
+          const recent = safePrev.recentSteps || [];
           const existingIdx =
             typeof step.number === "number"
               ? recent.findIndex((s) => s.number === step.number)
@@ -139,9 +179,9 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
           }
 
           return {
-            ...prev,
+            ...safePrev,
             currentAction: step.action,
-            currentUrl: step.url || prev?.currentUrl,
+            currentUrl: step.url || safePrev.currentUrl,
             recentSteps: updatedSteps,
             status: "working",
           };
@@ -151,11 +191,16 @@ export const browserArtifact = new Artifact<"browser", BrowserArtifactMetadata>(
       if (streamPart.type === "data-qa-status") {
         const statusText = streamPart.data;
         setMetadata((prev) => {
-          if (isTerminalExecutionState(prev?.executionState)) {
-            return prev;
+          const safePrev = prev ?? {};
+          if (
+            (safePrev.executionState === "CANCELLED" ||
+              safePrev.executionState === "CANCELLING") &&
+            safePrev.status === "stopped"
+          ) {
+            return safePrev;
           }
           return {
-            ...prev,
+            ...safePrev,
             currentAction: statusText,
             status: "working",
           };

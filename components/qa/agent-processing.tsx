@@ -75,20 +75,18 @@ export const AgentProcessing = memo(
           "error" in (p.output as Record<string, unknown>))
     );
 
-    const execState = metadata?.executionState;
-    const isCanonicalTerminal = isTerminalExecutionState(execState);
-
-    const isPartStopped = parts.some(
+    // Distinguish this message's historical state from the global metadata state
+    const isThisMessageStopped = parts.some(
       (p) =>
         Boolean(p.output?.isStopped) ||
         p.output?.output === "Test execution was stopped by user."
     );
 
-    const isCancelled =
-      execState === "CANCELLED" ||
-      metadata?.status === "cancelled" ||
-      metadata?.status === "stopped" ||
-      isPartStopped;
+    // If this message was stopped, its state is frozen at CANCELLED and never affected by future runs
+    const execState = isThisMessageStopped
+      ? "CANCELLED"
+      : metadata?.executionState;
+    const isCanonicalTerminal = isTerminalExecutionState(execState);
 
     const isError =
       Boolean(errorPart) ||
@@ -102,6 +100,7 @@ export const AgentProcessing = memo(
       execState === "STARTING" ||
       execState === "RUNNING" ||
       execState === "WAITING" ||
+      execState === "RESUMING" ||
       execState === "FINALIZING" ||
       execState === "CANCELLING";
 
@@ -110,7 +109,8 @@ export const AgentProcessing = memo(
 
     const isAnyRunning =
       !isError &&
-      !isCancelled &&
+      !isThisMessageStopped &&
+      execState !== "CANCELLED" &&
       !isCanonicalTerminal &&
       (isTrackerActive || isToolStreamActive);
 
@@ -202,16 +202,19 @@ export const AgentProcessing = memo(
               ? "completed"
               : isPartError
                 ? "failed"
-                : isCancelled || execState === "CANCELLING" || !isAnyRunning
+                : isThisMessageStopped ||
+                    execState === "CANCELLING" ||
+                    !isAnyRunning
                   ? "completed"
                   : "running",
         });
       }
 
-      // 3. Evaluation & Assertion Step (Only if not cancelled or cancelling)
+      // 3. Evaluation & Assertion Step (Only if not cancelled)
       if (
-        !isCancelled &&
+        !isThisMessageStopped &&
         execState !== "CANCELLING" &&
+        execState !== "CANCELLED" &&
         (evaluateTestResultPart ||
           execState === "FINALIZING" ||
           execState === "COMPLETED")
@@ -244,17 +247,25 @@ export const AgentProcessing = memo(
       evaluateTestResultPart,
       metadata?.targetUrl,
       execState,
-      isCancelled,
+      isThisMessageStopped,
       isAnyRunning,
     ]);
 
     // Descriptive live summary text projected from canonical state
     const activeDescription = useMemo(() => {
-      if (execState === "CANCELLING") {
-        return "Stopping test execution...";
+      if (execState === "RESUMING") {
+        return (
+          (metadata?.currentAction !== "Test was stopped by user." &&
+            metadata?.currentAction) ||
+          "Reconnecting to the test..."
+        );
       }
 
-      if (isCancelled) {
+      if (execState === "CANCELLING") {
+        return "Cancelling...";
+      }
+
+      if (isThisMessageStopped || execState === "CANCELLED") {
         return "Test was stopped by user.";
       }
 
@@ -284,8 +295,13 @@ export const AgentProcessing = memo(
 
       // 2. Active Browser Step Execution phase
       if (isAnyRunning && (isRunStepRunning || execState === "RUNNING")) {
-        if (metadata?.currentAction) {
-          return `${metadata.currentAction}...`;
+        if (
+          metadata?.currentAction &&
+          metadata.currentAction !== "Test was stopped by user." &&
+          metadata.currentAction !== "Stopping test execution..."
+        ) {
+          const actionText = metadata.currentAction;
+          return actionText.endsWith("...") ? actionText : `${actionText}...`;
         }
 
         const activeStep = runBrowserStepParts.find(
@@ -299,25 +315,32 @@ export const AgentProcessing = memo(
           }
           return `Executing: ${instruction}...`;
         }
-        return "Testing the application in live browser...";
+        return "Working...";
       }
 
       // 3. Waiting / Analyzing Phase (Browser action completed, awaiting assertions)
       if (isAnyRunning && execState === "WAITING") {
-        return (
-          metadata?.currentAction ||
-          "Analyzing browser outcome and verifying state..."
-        );
+        return metadata?.currentAction || "Waiting for browser...";
       }
 
       // 4. Finalizing / Verification Phase
       if (isAnyRunning && (isEvalRunning || execState === "FINALIZING")) {
-        return "Verifying assertions and recording findings...";
+        return "Finishing verification...";
       }
 
       // 5. Completed Phase
-      if (evaluateTestResultPart?.output?.title) {
+      if (
+        evaluateTestResultPart?.output?.title &&
+        evaluateTestResultPart.output?.title !== "Test Stopped"
+      ) {
         return `Verification complete: ${evaluateTestResultPart.output.title}`;
+      }
+
+      if (
+        metadata?.finding?.title &&
+        metadata.finding?.title !== "Test Stopped"
+      ) {
+        return `Verification complete: ${metadata.finding.title}`;
       }
 
       if (execState === "COMPLETED" || metadata?.status === "completed") {
@@ -326,13 +349,13 @@ export const AgentProcessing = memo(
 
       // 6. Streaming continuation fallback (never premature 'Test completed')
       if (isLoading) {
-        return "Finalizing test summary...";
+        return "Working...";
       }
 
       return "Test completed.";
     }, [
       isAnyRunning,
-      isCancelled,
+      isThisMessageStopped,
       execState,
       isError,
       isStartRunning,
@@ -343,6 +366,7 @@ export const AgentProcessing = memo(
       metadata?.errorMessage,
       metadata?.targetUrl,
       metadata?.currentAction,
+      metadata?.finding,
       metadata?.status,
       startTestSessionPart,
       runBrowserStepParts,
@@ -356,10 +380,16 @@ export const AgentProcessing = memo(
 
     // Duration formatting
     const durationDisplay = useMemo(() => {
+      if (execState === "RESUMING") {
+        return "✦ Resuming...";
+      }
+      if (execState === "CANCELLING") {
+        return "✦ Cancelling...";
+      }
       if (isAnyRunning) {
         return elapsedSeconds > 0
-          ? `Working for ${elapsedSeconds}s`
-          : "Working…";
+          ? `✦ Worked for ${elapsedSeconds}s`
+          : "✦ Working…";
       }
       if (persistedDuration !== null) {
         return `Worked for ${persistedDuration}s`;
@@ -372,7 +402,13 @@ export const AgentProcessing = memo(
       return totalSteps > 0
         ? `Worked for ${Math.max(2, totalSteps * 3)}s`
         : "Worked for a few seconds";
-    }, [isAnyRunning, elapsedSeconds, persistedDuration, validActions.length]);
+    }, [
+      execState,
+      isAnyRunning,
+      elapsedSeconds,
+      persistedDuration,
+      validActions.length,
+    ]);
 
     return (
       <Collapsible

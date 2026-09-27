@@ -30,11 +30,13 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
 
         const isCancelled =
           ExecutionTracker.isCancelRequested(chatId) ||
-          existingSession?.status === "cancelled" ||
-          activeRun?.executionState === "CANCELLED" ||
           activeRun?.executionState === "CANCELLING";
 
-        if (isCancelled && activeRun?.executionState !== "RESUMING") {
+        if (
+          isCancelled &&
+          activeRun?.executionState !== "RESUMING" &&
+          activeRun?.executionState !== "RUNNING"
+        ) {
           console.log(
             `[runBrowserStep] Execution blocked because session ${chatId} is cancelled.`
           );
@@ -53,6 +55,7 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
           !activeRun ||
           activeRun.executionState === "COMPLETED" ||
           activeRun.executionState === "FAILED" ||
+          activeRun.executionState === "CANCELLED" ||
           activeRun.executionState === "RESUMING"
         ) {
           activeRun = ExecutionTracker.startRun({
@@ -61,6 +64,16 @@ export const runBrowserStep = ({ chatId, dataStream }: RunBrowserStepProps) =>
             sessionId: existingSession?.id || browserSessionId,
             targetUrl: existingSession?.targetUrl || "https://localhost",
           });
+        }
+
+        // Unconditionally ensure DB test session is marked active
+        if (existingSession?.id) {
+          const { updateTestSessionStatus } = await import("@/lib/db/queries");
+          await updateTestSessionStatus({
+            force: true,
+            id: existingSession.id,
+            status: "active",
+          }).catch(() => null);
         }
 
         // Stream initial running state

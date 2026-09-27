@@ -94,20 +94,29 @@ export async function GET(request: Request) {
       }
     }
 
-    if (testSession.status === "cancelled" && execution) {
+    if (
+      testSession.status === "cancelled" &&
+      execution &&
+      execution.executionState !== "RUNNING" &&
+      execution.executionState !== "RESUMING" &&
+      execution.executionState !== "STARTING" &&
+      execution.executionState !== "FINALIZING" &&
+      execution.executionState !== "COMPLETED"
+    ) {
       execution.executionState = "CANCELLED";
       execution.isCancelRequested = true;
       execution.currentAction = "Test stopped by user";
     }
 
+    const sessionFindings = await getQAFindingsBySessionId({
+      testSessionId: testSession.id,
+    }).catch(() => []);
+    const lastSessionFinding = sessionFindings.at(-1);
+
     // Fallback reconstruction if no snapshot was persisted yet
     if (!execution && testSession) {
-      const findings = await getQAFindingsBySessionId({
-        testSessionId: testSession.id,
-      }).catch(() => []);
-
-      const lastFinding = findings.at(-1);
-      const isComplete = currentStatus === "completed" || Boolean(lastFinding);
+      const isComplete =
+        currentStatus === "completed" || Boolean(lastSessionFinding);
       const isStopped =
         currentStatus === "cancelled" || currentStatus === "paused";
 
@@ -132,7 +141,7 @@ export async function GET(request: Request) {
             : currentStatus === "active"
               ? "WAITING"
               : "STARTING",
-        findingId: lastFinding?.id,
+        findingId: lastSessionFinding?.id,
         lastActivityAt: testSession.updatedAt.toISOString(),
         runId: `restored-${testSession.id}`,
         sequence: 1,
@@ -140,12 +149,25 @@ export async function GET(request: Request) {
         startedAt: testSession.createdAt.toISOString(),
         steps: [],
         targetUrl: testSession.targetUrl,
-        verdict: (lastFinding?.verdict as any) ?? undefined,
+        verdict: (lastSessionFinding?.verdict as any) ?? undefined,
       };
     }
 
     return Response.json({
       execution,
+      finding: lastSessionFinding
+        ? {
+            actual: lastSessionFinding.actualResult,
+            evidence: lastSessionFinding.evidence || [],
+            expected: lastSessionFinding.expectedResult,
+            findingId: lastSessionFinding.id,
+            reproductionSteps: lastSessionFinding.reproductionSteps || [],
+            severity: lastSessionFinding.severity || "medium",
+            status: lastSessionFinding.verdict,
+            summary: lastSessionFinding.actualResult || "",
+            title: lastSessionFinding.title,
+          }
+        : null,
       session: {
         browserScreenHeight: cloudScreenHeight,
         browserScreenWidth: cloudScreenWidth,
